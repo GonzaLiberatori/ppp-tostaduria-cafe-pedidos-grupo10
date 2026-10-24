@@ -1,7 +1,8 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime
+from sqlalchemy import or_, and_
 
 from app.modules.pedidos import models, schemas
 
@@ -282,12 +283,55 @@ def create_pedido(db: Session, pedido: schemas.PedidoCreate) -> models.Pedido:
     db.flush()
     
     for detalle_data in detalles_data:
-        db_detalle = models.DetallePedido(**detalle_data.model_dump(), pedido_id=db_pedido.id)
+        # Calcular subtotal si no viene provisto
+        detalle_dict = detalle_data.model_dump()
+        if "subtotal" not in detalle_dict or detalle_dict["subtotal"] is None:
+            precio_kg = _calcular_precio_kg_detalle(db, detalle_data)
+            detalle_dict["subtotal"] = precio_kg * detalle_dict["cantidad_kg"]
+        
+        db_detalle = models.DetallePedido(**detalle_dict, pedido_id=db_pedido.id)
         db.add(db_detalle)
     
     db.commit()
     db.refresh(db_pedido)
     return db_pedido
+
+
+def _calcular_precio_kg_detalle(db: Session, detalle_data: schemas.DetallePedidoCreate) -> Decimal:
+    """Calcular precio por kg según tipo de café, blend, molienda y perfil de tostado"""
+    from decimal import Decimal
+    from app.modules.pedidos.models import TipoDeCafe, Blend, Molienda, PerfilDeTostado
+    
+    precio_base = Decimal("0")
+    
+    if detalle_data.tipo_de_cafe_id:
+        tipo_cafe = db.query(TipoDeCafe).filter(TipoDeCafe.id == detalle_data.tipo_de_cafe_id).first()
+        if not tipo_cafe:
+            raise ValueError(f"Tipo de café {detalle_data.tipo_de_cafe_id} no encontrado")
+        precio_base = tipo_cafe.precio_por_kg_verde
+    elif detalle_data.blend_id:
+        blend = db.query(Blend).filter(Blend.id == detalle_data.blend_id).first()
+        if not blend:
+            raise ValueError(f"Blend {detalle_data.blend_id} no encontrado")
+        precio_base = blend.precio_por_kg_verde
+    else:
+        raise ValueError("Debe especificar tipo_de_cafe_id o blend_id")
+    
+    # Agregar valor de molienda
+    if detalle_data.molienda_id:
+        molienda = db.query(Molienda).filter(Molienda.id == detalle_data.molienda_id).first()
+        if not molienda:
+            raise ValueError(f"Molienda {detalle_data.molienda_id} no encontrada")
+        precio_base += molienda.valor_agregado_por_kg
+    
+    # Agregar valor de perfil de tostado
+    if detalle_data.perfil_de_tostado_id:
+        perfil = db.query(PerfilDeTostado).filter(PerfilDeTostado.id == detalle_data.perfil_de_tostado_id).first()
+        if not perfil:
+            raise ValueError(f"Perfil de tostado {detalle_data.perfil_de_tostado_id} no encontrado")
+        precio_base += perfil.valor_agregado_por_kg
+    
+    return precio_base
 
 
 def update_pedido(db: Session, pedido_id: int, pedido_update: schemas.PedidoUpdate) -> Optional[models.Pedido]:
@@ -353,6 +397,139 @@ def _devolver_stock_lotes(lotes: List[models.Lote], cantidad: Decimal):
         session = Session.object_session(lotes[0])
         if session:
             session.commit()
+
+
+# PedidoEstadoHistorial
+def create_estado_historial(db: Session, pedido_id: int, estado_anterior: Optional[str], estado_nuevo: str, usuario_id: Optional[int] = None) -> models.PedidoEstadoHistorial:
+    """Registrar cambio de estado en el historial"""
+    from datetime import datetime
+    historial = models.PedidoEstadoHistorial(
+        pedido_id=pedido_id,
+        estado_anterior=estado_anterior,
+        estado_nuevo=estado_nuevo,
+        usuario_id=usuario_id,
+        timestamp=datetime.now()
+    )
+    db.add(historial)
+    db.commit()
+    db.refresh(historial)
+    return historial
+
+
+def get_historial_by_pedido(db: Session, pedido_id: int) -> List[models.PedidoEstadoHistorial]:
+    return db.query(models.PedidoEstadoHistorial).filter(
+        models.PedidoEstadoHistorial.pedido_id == pedido_id
+    ).order_by(models.PedidoEstadoHistorial.timestamp).all()
+
+
+# Pedido - métodos adicionales
+def get_pedido_by_idempotency_key(db: Session, idempotency_key: str) -> Optional[models.Pedido]:
+    return db.query(models.Pedido).filter(models.Pedido.idempotency_key == idempotency_key).first()
+
+
+def create_pedido_items_bulk(db: Session, pedido_id: int, detalles: List[schemas.DetallePedidoCreate]) -> List[models.DetallePedido]:
+    """Crear múltiples items de pedido en bulk"""
+    db_detalles = []
+    for detalle_data in detalles:
+        db_detalle = models.DetallePedido(**detalle_data.model_dump(), pedido_id=pedido_id)
+        db.add(db_detalle)
+        db_detalles.append(db_detalle)
+    db.commit()
+    for d in db_detalles:
+        db.refresh(d)
+    return db_detalles
+
+
+def get_pedidos_con_filtros(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    estado: Optional[str] = None,
+    cliente_persona_id: Optional[int] = None,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+    q: Optional[str] = None
+) -> List[models.Pedido]:
+    """Obtener pedidos con filtros y paginación"""
+    from sqlalchemy.orm import joinedload
+    
+    query = db.query(models.Pedido).options(
+        joinedload(models.Pedido.cliente).joinedload(models.Cliente.persona)
+    )
+    
+    if estado:
+        query = query.filter(models.Pedido.estado == estado)
+    
+    if cliente_persona_id:
+        query = query.filter(models.Pedido.cliente_persona_id == cliente_persona_id)
+    
+    if fecha_desde:
+        query = query.filter(models.Pedido.fecha >= fecha_desde)
+    
+    if fecha_hasta:
+        query = query.filter(models.Pedido.fecha <= fecha_hasta)
+    
+    if q:
+        query = query.join(models.Cliente).join(models.Persona).filter(
+            or_(
+                models.Persona.nombre.ilike(f"%{q}%"),
+                models.Persona.apellido.ilike(f"%{q}%"),
+                models.Pedido.medio_contacto.ilike(f"%{q}%"),
+                models.Pedido.observaciones.ilike(f"%{q}%"),
+            )
+        )
+    
+    query = query.order_by(models.Pedido.fecha.desc())
+    return query.offset(skip).limit(limit).all()
+
+
+def count_pedidos_con_filtros(
+    db: Session,
+    estado: Optional[str] = None,
+    cliente_persona_id: Optional[int] = None,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+    q: Optional[str] = None
+) -> int:
+    """Contar pedidos con filtros para paginación"""
+    query = db.query(models.Pedido)
+    
+    if estado:
+        query = query.filter(models.Pedido.estado == estado)
+    
+    if cliente_persona_id:
+        query = query.filter(models.Pedido.cliente_persona_id == cliente_persona_id)
+    
+    if fecha_desde:
+        query = query.filter(models.Pedido.fecha >= fecha_desde)
+    
+    if fecha_hasta:
+        query = query.filter(models.Pedido.fecha <= fecha_hasta)
+    
+    if q:
+        query = query.join(models.Cliente).join(models.Persona).filter(
+            or_(
+                models.Persona.nombre.ilike(f"%{q}%"),
+                models.Persona.apellido.ilike(f"%{q}%"),
+                models.Pedido.medio_contacto.ilike(f"%{q}%"),
+                models.Pedido.observaciones.ilike(f"%{q}%"),
+            )
+        )
+    
+    return query.count()
+
+
+def get_pedido_with_full_info(db: Session, pedido_id: int) -> Optional[models.Pedido]:
+    """Obtener pedido con items, cliente e historial"""
+    from sqlalchemy.orm import joinedload
+    return db.query(models.Pedido).options(
+        joinedload(models.Pedido.detalles).joinedload(models.DetallePedido.tipo_de_cafe),
+        joinedload(models.Pedido.detalles).joinedload(models.DetallePedido.blend),
+        joinedload(models.Pedido.detalles).joinedload(models.DetallePedido.molienda),
+        joinedload(models.Pedido.detalles).joinedload(models.DetallePedido.perfil_de_tostado),
+        joinedload(models.Pedido.cliente).joinedload(models.Cliente.persona),
+        joinedload(models.Pedido.historial_estados)
+    ).filter(models.Pedido.id == pedido_id).first()
 
 
 # DetallePedido

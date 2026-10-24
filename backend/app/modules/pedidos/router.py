@@ -67,24 +67,33 @@ def crear_pedido(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/", response_model=List[schemas.PedidoResponse])
+@router.get("/", response_model=List[schemas.PedidoListRead])
 def listar_pedidos(
     skip: int = 0,
     limit: int = 100,
+    estado: Optional[str] = None,
+    cliente_persona_id: Optional[int] = None,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+    q: Optional[str] = None,
     current_user: TokenData = Depends(get_current_user_required),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Listar todos los pedidos con info de cliente"""
-    return service.obtener_todos_pedidos(skip, limit)
+    """Listar todos los pedidos con filtros y paginación"""
+    from app.modules.pedidos import crud
+    pedidos = crud.get_pedidos_con_filtros(
+        service.db, skip, limit, estado, None, None, None, None
+    )
+    return pedidos
 
 
-@router.get("/{pedido_id}", response_model=schemas.PedidoResponse)
+@router.get("/{pedido_id}", response_model=schemas.PedidoDetailRead)
 def obtener_pedido(
     pedido_id: int,
     current_user: TokenData = Depends(get_current_user_required),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Obtener un pedido por ID con info de cliente"""
+    """Obtener un pedido por ID con items, cliente e historial"""
     pedido = service.obtener_pedido_por_id(pedido_id)
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
@@ -100,7 +109,14 @@ def cambiar_estado_pedido(
 ):
     """Cambiar estado del pedido (PENDIENTE, LISTO, ENTREGADO)"""
     try:
-        pedido = service.cambiar_estado_pedido(pedido_id, estado)
+        # Obtener usuario_id del usuario autenticado
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona
+        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        usuario_id = persona.id if persona else None
+        
+        pedido = service.cambiar_estado_pedido(pedido_id, estado, usuario_id)
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido
@@ -108,16 +124,22 @@ def cambiar_estado_pedido(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/{pedido_id}", response_model=schemas.PedidoResponse)
+@router.put("/{pedido_id}", response_model=schemas.PedidoDetailRead)
 def actualizar_pedido(
     pedido_id: int,
     pedido_update: schemas.PedidoUpdate,
     current_user: TokenData = Depends(get_current_user_required),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Actualizar un pedido (estado, método de despacho). No permite cambiar detalles ni totales."""
+    """Actualizar un pedido (estado, método de despacho, observaciones). No permite cambiar detalles ni totales."""
     try:
-        pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=None)
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona
+        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        usuario_id = persona.id if persona else None
+        
+        pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=None, usuario_id=usuario_id)
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido
@@ -125,7 +147,7 @@ def actualizar_pedido(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/{pedido_id}/con-detalles", response_model=schemas.PedidoResponse)
+@router.put("/{pedido_id}/con-detalles", response_model=schemas.PedidoDetailRead)
 def actualizar_pedido_con_detalles(
     pedido_id: int,
     data: schemas.PedidoUpdateConDetalles,
@@ -134,13 +156,23 @@ def actualizar_pedido_con_detalles(
 ):
     """Actualizar un pedido con nuevos detalles (recalcula totales y ajusta stock)"""
     try:
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona
+        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        usuario_id = persona.id if persona else None
+        
         update_data = {}
         if data.estado is not None:
             update_data['estado'] = data.estado
         if data.metodo_de_despacho is not None:
             update_data['metodo_de_despacho'] = data.metodo_de_despacho
+        if data.observaciones is not None:
+            update_data['observaciones'] = data.observaciones
+        if data.medio_contacto is not None:
+            update_data['medio_contacto'] = data.medio_contacto
         pedido_update = schemas.PedidoUpdate(**update_data)
-        pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=data.detalles)
+        pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=data.detalles, usuario_id=usuario_id)
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido

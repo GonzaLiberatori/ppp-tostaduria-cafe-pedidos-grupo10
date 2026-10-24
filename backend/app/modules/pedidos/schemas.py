@@ -1,7 +1,13 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
+
+
+class EstadoPedidoEnum(str):
+    PENDIENTE = "PENDIENTE"
+    LISTO = "LISTO"
+    ENTREGADO = "ENTREGADO"
 
 
 class PaisBase(BaseModel):
@@ -225,20 +231,15 @@ class DetallePedidoBase(BaseModel):
     perfil_de_tostado_id: Optional[int] = None
 
 
-class DetallePedidoCreate(BaseModel):
-    cantidad_kg: Decimal
-    subtotal: Optional[Decimal] = None
-    tipo_de_cafe_id: Optional[int] = None
-    blend_id: Optional[int] = None
-    molienda_id: Optional[int] = None
-    perfil_de_tostado_id: Optional[int] = None
-
-
 class DetallePedidoResponse(DetallePedidoBase):
     id: int
     pedido_id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DetallePedidoCreate(DetallePedidoBase):
+    subtotal: Optional[Decimal] = None
 
 
 class PedidoBase(BaseModel):
@@ -255,26 +256,88 @@ class PedidoCreate(BaseModel):
     metodo_de_despacho: str
     estado: str = "PENDIENTE"
     total: Optional[Decimal] = None
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
     cliente_persona_id: int
     empleado_persona_id: int
     detalles: List[DetallePedidoCreate]
+
+    @field_validator('detalles')
+    @classmethod
+    def validar_detalles_no_vacios(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("El pedido debe tener al menos un item")
+        return v
 
 
 class PedidoUpdate(BaseModel):
     estado: Optional[str] = None
     metodo_de_despacho: Optional[str] = None
+    observaciones: Optional[str] = None
+    medio_contacto: Optional[str] = None
+
+    @field_validator('estado')
+    @classmethod
+    def validar_estado(cls, v):
+        if v is not None and v not in ["PENDIENTE", "LISTO", "ENTREGADO"]:
+            raise ValueError("Estado inválido. Debe ser PENDIENTE, LISTO o ENTREGADO")
+        return v
 
 
 class PedidoUpdateConDetalles(BaseModel):
     estado: Optional[str] = None
     metodo_de_despacho: Optional[str] = None
+    observaciones: Optional[str] = None
+    medio_contacto: Optional[str] = None
     detalles: List[DetallePedidoCreate]
 
 
-class PedidoResponse(PedidoBase):
+class PedidoDetailRead(BaseModel):
     id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: int
     detalles: List[DetallePedidoResponse] = []
-    cliente: Optional[ClienteResponse] = None
+    cliente: Optional["ClienteResponse"] = None
+    historial_estados: List["PedidoEstadoHistorialRead"] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoListRead(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    cliente_persona_id: int
+    items_count: int = 0
+    kilos_totales: Decimal = Decimal("0")
+    medio_contacto: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoResponse(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: int
+    detalles: List["DetallePedidoResponse"] = []
+    cliente: Optional["ClienteResponse"] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -313,7 +376,51 @@ class VentaResponse(VentaBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PedidoEstadoHistorialRead(BaseModel):
+    id: int
+    pedido_id: int
+    estado_anterior: Optional[str] = None
+    estado_nuevo: str
+    usuario_id: Optional[int] = None
+    timestamp: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoDetailRead(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: int
+    detalles: List["DetallePedidoResponse"] = []
+    cliente: Optional["ClienteResponse"] = None
+    historial_estados: List["PedidoEstadoHistorialRead"] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoListRead(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    cliente_persona_id: int
+    items_count: int = 0
+    kilos_totales: Decimal = Decimal("0")
+    medio_contacto: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Resolve forward references
 ClienteResponse.model_rebuild()
 EmpleadoResponse.model_rebuild()
+PedidoCreate.model_rebuild()
 PedidoResponse.model_rebuild()
