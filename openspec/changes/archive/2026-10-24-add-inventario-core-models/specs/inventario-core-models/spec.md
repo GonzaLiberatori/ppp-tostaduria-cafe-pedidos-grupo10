@@ -32,16 +32,16 @@ El sistema SHALL contar con el modelo `Lote` con `id` (MEDIUMINT UNSIGNED), `tip
 
 #### Scenario: Crear lote verde asociado a tipo de café
 - **WHEN** se crea un `Lote` con `tipo=VERDE` y `tipo_de_cafe_id` asociado
-- **THEN** el lote queda registrado con sus campos obligatorios y deja a `blend_id` y `orden_de_tueste_id` en null
+- **THEN** el lote queda registrado con sus campos obligatorios y deja a `blend_id` y `orden_tueste_id` en null
 
 #### Scenario: Crear lote tostado asociado a tipo de cafe
 - **WHEN** se crea un `Lote` con `tipo=TOSTADO` y `tipo_de_cafe_id` asociado
-- **THEN** el lote queda registrado con sus campos obligatorios mas `orden_de_tueste_id` dejando `blend_id` en null
+- **THEN** el lote queda registrado con sus campos obligatorios mas `orden_tueste_id` dejando `blend_id` en null
 
 #### Scenario: Crear lote verde asociado a blend
 - **WHEN** se crea un `Lote` con `tipo=VERDE` y `blend_id` asociado
-- **THEN** el lote queda registrado con sus campos obligatorios y deja a `tipo_de_cafe_id` y `orden_de_tueste_id` en null
+- **THEN** el lote queda registrado con sus campos obligatorios y deja a `tipo_de_cafe_id` y `orden_tueste_id` en null
 
 #### Scenario: Crear lote tostado asociado a blend
 - **WHEN** se crea un `Lote` con `tipo=TOSTADO` y `blend_id` asociado
-- **THEN** el lote queda registrado con sus campos obligatorios mas `orden_de_tueste_id` dejando `tipo_de_cafe_id` en null
+- **THEN** el lote queda registrado con sus campos obligatorios mas `orden_tueste_id` dejando `tipo_de_cafe_id` en null
