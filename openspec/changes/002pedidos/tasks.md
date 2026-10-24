@@ -2,17 +2,17 @@
 
 ## Fase 0: Configuración Base y OpenSpec
 
-- [ ] **T0.1** Configurar Alembic `target_metadata` en `backend/alembic/env.py`
-- [ ] **T0.2** Crear `backend/tests/conftest.py` con fixtures SQLite en memoria
-- [ ] **T0.3** Implementar modelos mínimos en `backend/app/modules/inventario/models.py` (Stock) y `backend/app/modules/clientes/models.py` (Cliente con saldo_cuenta_corriente)
-- [ ] **T0.4** Crear `openspec/specs/pedidos/spec.md` sincronizando desde delta
+- [x] **T0.1** Configurar Alembic `target_metadata` en `backend/alembic/env.py`
+- [x] **T0.2** Crear `backend/tests/conftest.py` con fixtures SQLite en memoria
+- [x] **T0.3** Implementar modelos mínimos en `backend/app/modules/inventario/models.py` (Stock) y `backend/app/modules/clientes/models.py` (Cliente con saldo_cuenta_corriente)
+- [x] **T0.4** Crear `openspec/specs/pedidos/spec.md` sincronizando desde delta
 
 ## Fase 1: Modelos Core y Migración
 
-- [ ] **T1.1** Agregar `PedidoEstadoHistorial`, `idempotency_key`, `medio_contacto`, `observaciones` en `backend/app/modules/pedidos/models.py`
-- [ ] **T1.2** Generar migración inicial: `alembic revision --autogenerate -m "Initial: pedidos, historial, stock, cliente cuenta corriente"`
-- [ ] **T1.3** Aplicar migración: `alembic upgrade head`
-- [ ] **T1.5** Verificar migración: `alembic check`
+- [x] **T1.1** Agregar `PedidoEstadoHistorial`, `idempotency_key`, `medio_contacto`, `observaciones` en `backend/app/modules/pedidos/models.py`
+- [x] **T1.2** Generar migración inicial: `alembic revision --autogenerate -m "Initial: pedidos, historial, stock, cliente cuenta corriente"`
+- [x] **T1.3** Aplicar migración: `alembic upgrade head`
+- [x] **T1.5** Verificar migración: `alembic check`
 
 ## Fase 2: Esquemas Pydantic
 
