@@ -35,7 +35,8 @@ Ninguna. `inventario-core-models` describe la persistencia y no cambia; este cam
 ## Impact
 
 - `backend/app/modules/inventario/schemas.py` (hoy vacío): se completa con los schemas de las tres entidades.
-- `backend/app/modules/inventario/models.py`: solo se importa (`LoteTipo`, `LoteEstado`); no se modifica.
+- `backend/app/modules/inventario/models.py`: se importan `LoteTipo` y `LoteEstado`, y queda **comentada** la relación `Lote.orden_tueste` (columna `orden_tueste_id` intacta). No hay ningún otro cambio en el archivo.
 - Dependencia de Pydantic v2 (`field_validator` / `model_validator`) para el aplanado de nombres y la validación de composición de blend.
 - Habilita los cambios posteriores de `router.py`, `crud.py` y `services.py` del módulo de inventario.
-- Riesgo detectado: `Lote.orden_tueste_id` declara `ForeignKey("orden_tueste.id")` pero la tabla no existe todavía en `backend/app/modules/produccion/models.py`. El schema de lectura va a exponer el campo igualmente; la deuda se documenta en `design.md`.
+- **Defecto corregido en `models.py` durante la implementación:** `Lote.orden_tueste` estaba declarado como `Mapped[Optional["object"]] = relationship()`, y SQLAlchemy interpreta la anotación `"object"` como el nombre de una entidad a resolver. Al no existir, `configure_mappers()` fallaba y **ningún objeto ORM del módulo podía instanciarse**. La relación queda comentada; la columna `orden_tueste_id` se mantiene.
+- Riesgo residual: `Lote.orden_tueste_id` declara `ForeignKey("orden_tueste.id")` pero la tabla no existe todavía en `backend/app/modules/produccion/models.py`. El schema de lectura expone el campo igualmente; la migración que cree `lote` va a fallar hasta que exista `orden_tueste`. La deuda se documenta en `design.md`.

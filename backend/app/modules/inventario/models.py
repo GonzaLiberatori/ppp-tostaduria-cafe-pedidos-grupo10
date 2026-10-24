@@ -110,4 +110,9 @@ class Lote(Base):
 
     tipo_de_cafe: Mapped[Optional["TipoDeCafe"]] = relationship(back_populates="lotes")
     blend: Mapped[Optional["Blend"]] = relationship(back_populates="lotes")
-    orden_tueste: Mapped[Optional["object"]] = relationship()
+    # Deshabilitado: la anotación Mapped[Optional["object"]] hace que SQLAlchemy
+    # trate "object" como el nombre de una entidad y rompe configure_mappers(),
+    # lo que impide instanciar cualquier objeto ORM del módulo. La tabla
+    # "orden_tueste" todavía no existe porque producción no define OrdenTueste.
+    # Se reactiva junto con ese modelo, usando la anotación correcta.
+    # orden_tueste: Mapped[Optional["object"]] = relationship()
