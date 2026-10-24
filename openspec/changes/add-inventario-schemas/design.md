@@ -29,11 +29,21 @@ Ver `proposal.md` para la motivación y `specs/inventario-schemas/spec.md` para 
 
 ### Un schema por operación, no un modelo único con todo opcional
 
-Se definen `TipoDeCafeCreate`, `TipoDeCafeUpdate`, `TipoDeCafeRead`, `TipoDeCafeDelete` (y el equivalente para `Blend` y `Lote`).
+Se definen `TipoDeCafeCreate`, `TipoDeCafeUpdate` y `TipoDeCafeRead` (y el equivalente para `Blend` y `Lote`), más los tres schemas puntuales de `Lote`. **No hay schema de eliminación**: ver la decisión siguiente.
 
 **Por qué:** un modelo único con todos los campos `Optional` compila, pero el consumidor no puede distinguir qué exige cada endpoint y OpenAPI documenta un contrato falso. Los schemas separados hacen que la regla de opcionalidad sea estructural y no una convención a memorizar.
 
 **Alternativa descartada:** un `Base` con todos los campos y subclases por operación. Genera herencia de la que nadie se acuerda y arrastra campos que la operación no usa.
+
+### La baja no tiene schema: el `id` va por parámetro de ruta
+
+No se definen `TipoDeCafeDelete`, `BlendDelete` ni `LoteDelete`. El `id` de la eliminación se recibe como path parameter en la firma del endpoint (`def eliminar(id: int, ...)` con `/recurso/{id}`), y FastAPI lo valida y documenta en OpenAPI por su cuenta.
+
+**Por qué:** un cuerpo `{"id": 7}` junto a la ruta `/tipo-de-cafe/7` declara la misma identidad dos veces, y obliga a decidir cuál manda cuando discrepan. El path parameter ya es obligatorio, ya está tipado y ya aparece en el contrato; el schema de solo `id` no aporta validación nueva.
+
+**Alternativa descartada:** `DELETE` con body y sin id en la ruta. Funciona, pero rompe la semántica REST, hace que muchos clientes HTTP no lo soporten bien y empeora la documentación de OpenAPI.
+
+**Nota:** la regla de opcionalidad sigue vigente como concepto — "la eliminación solo recibe el `id`" — pero se cumple en el router, no en Pydantic. Los tres endpoints puntuales de `Lote` sí conservan su `id` por ruta y un body de un solo campo, porque ahí el cuerpo aporta el atributo que cambia.
 
 ### Los nombres de origen se aplanan en el contrato, no en el modelo
 
@@ -71,7 +81,7 @@ Se definen `TipoDeCafeCreate`, `TipoDeCafeUpdate`, `TipoDeCafeRead`, `TipoDeCafe
 
 ### `extra="forbid"` en todos los schemas de entrada
 
-Create, Update, Delete y los tres puntuales de lote rechazan campos no declarados.
+Create, Update y los tres puntuales de lote rechazan campos no declarados. El `Read` también, aunque es solo de salida: impide que una respuesta arrastre atributos ajenos al contrato.
 
 **Por qué:** el requisito del lote (no poder recibir `tipo` ni las FKs) se cumple de forma estructural con `extra="forbid"`, sin un validador que enumere campos prohibidos y se desactualice. Es el mismo mecanismo que protege el resto de los contratos ante un typo del cliente.
 

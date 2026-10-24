@@ -10,7 +10,6 @@ from app.modules.inventario.models import Blend, BlendHasTipoDeCafe
 from app.modules.inventario.schemas import (
     BlendComposicionItem,
     BlendCreate,
-    BlendDelete,
     BlendRead,
     BlendUpdate,
 )
@@ -148,7 +147,7 @@ def test_update_rechaza_composicion_vacia():
 
 
 # ---------------------------------------------------------------------------
-# Lectura y borrado (3.5)
+# Lectura (3.5)
 # ---------------------------------------------------------------------------
 def test_read_serializa_composicion_completa():
     leido = BlendRead(
@@ -164,15 +163,6 @@ def test_read_serializa_composicion_completa():
         {"tipo_de_cafe_id": 1, "porcentaje": Decimal("50.00")},
         {"tipo_de_cafe_id": 2, "porcentaje": Decimal("50.00")},
     ]
-
-
-def test_delete_con_solo_id():
-    assert BlendDelete(id=9).id == 9
-
-
-def test_delete_rechaza_campos_adicionales():
-    with pytest.raises(ValidationError):
-        BlendDelete(id=9, nombre="otro")
 
 
 # ---------------------------------------------------------------------------

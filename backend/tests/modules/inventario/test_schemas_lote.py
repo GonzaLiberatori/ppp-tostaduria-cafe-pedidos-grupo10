@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from app.modules.inventario.models import Lote, LoteEstado, LoteTipo
 from app.modules.inventario.schemas import (
     LoteCreate,
-    LoteDelete,
     LoteEstadoUpdate,
     LoteKgDisponiblesUpdate,
     LoteKgRealesUpdate,
@@ -121,7 +120,7 @@ def test_update_rechaza_estados_fuera_del_enum():
 
 
 # ---------------------------------------------------------------------------
-# Lectura y borrado (4.4 y 4.5)
+# Lectura (4.4 y 4.5)
 # ---------------------------------------------------------------------------
 def test_read_serializa_con_los_cuatro_nullable_en_none():
     leido = LoteRead(id=3, **PAYLOAD_BASE)
@@ -147,15 +146,6 @@ def test_read_con_atributos_nullable_informados():
 def test_read_incluye_orden_tueste_id_pese_a_que_la_tabla_no_existe():
     """La deuda está registrada en design.md; el contrato expone el campo igual."""
     assert "orden_tueste_id" in LoteRead.model_fields
-
-
-def test_delete_con_solo_id():
-    assert LoteDelete(id=3).id == 3
-
-
-def test_delete_rechaza_campos_adicionales():
-    with pytest.raises(ValidationError):
-        LoteDelete(id=3, tipo="VERDE")
 
 
 # ---------------------------------------------------------------------------

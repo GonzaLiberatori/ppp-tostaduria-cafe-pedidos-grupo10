@@ -6,7 +6,7 @@ El módulo de inventario ya tiene sus modelos persistidos (`Pais`, `Region`, `Va
 
 ## What Changes
 
-- Se crean los schemas de creación, lectura, actualización y eliminación para `TipoDeCafe`, `Blend` y `Lote` en `backend/app/modules/inventario/schemas.py`.
+- Se crean los schemas de creación, lectura y actualización para `TipoDeCafe`, `Blend` y `Lote` en `backend/app/modules/inventario/schemas.py`. La eliminación **no lleva schema**: el `id` se recibe como parámetro de ruta en el endpoint.
 - `TipoDeCafe` recibe y devuelve `variedad`, `region` y `pais` **como texto** (`str`). El identificador de `TipoDeCafe` es su propio `id`; los nombres de origen son atributos descriptivos y nunca se envían como `variedad_id` ni `region_id`. No se crean endpoints para `Variedad`, `Region` ni `Pais`.
 - `Blend` recibe y devuelve su composición como lista de objetos `{tipo_de_cafe_id, porcentaje}`. No se crean endpoints para `BlendHasTipoDeCafe`.
 - `Lote` expone además tres schemas de edición puntual: `kg_disponibles`, `kg_reales` y `estado`, todos resueltos por id de lote.
@@ -14,7 +14,7 @@ El módulo de inventario ya tiene sus modelos persistidos (`Pais`, `Region`, `Va
   - **Create**: los atributos `nullable=True` del modelo no son obligatorios.
   - **Update**: todos los atributos editables son opcionales.
   - **Read**: siempre incluye `id` y devuelve todos los datos de la clase (los nullable pueden ser `null`).
-  - **Delete**: solo `id`.
+  - **Delete**: no tiene schema; el `id` va por parámetro de ruta.
 
 Fuera de alcance de este cambio:
 
@@ -26,7 +26,7 @@ Fuera de alcance de este cambio:
 
 ### New Capabilities
 
-- `inventario-schemas`: contratos Pydantic de entrada y salida (Create, Read, Update, Delete) para `TipoDeCafe`, `Blend` y `Lote`, incluyendo las reglas de opcionalidad por operación y las ediciones puntuales de lote.
+- `inventario-schemas`: contratos Pydantic de entrada y salida (Create, Read, Update) para `TipoDeCafe`, `Blend` y `Lote`, incluyendo las reglas de opcionalidad por operación y las ediciones puntuales de lote. La eliminación queda cubierta por el parámetro de ruta, sin schema propio.
 
 ### Modified Capabilities
 

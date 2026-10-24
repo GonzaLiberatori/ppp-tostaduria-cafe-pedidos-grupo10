@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from app.modules.inventario.models import Pais, Region, TipoDeCafe, Variedad
 from app.modules.inventario.schemas import (
     TipoDeCafeCreate,
-    TipoDeCafeDelete,
     TipoDeCafeRead,
     TipoDeCafeUpdate,
 )
@@ -120,19 +119,6 @@ def test_read_desde_orm_aplama_los_tres_nombres():
     assert leido.variedad == "Caturra"
     assert leido.region == "Huila"
     assert leido.pais == "Colombia"
-
-
-# ---------------------------------------------------------------------------
-# Eliminación
-# ---------------------------------------------------------------------------
-def test_delete_con_solo_id():
-    eliminado = TipoDeCafeDelete(id=7)
-    assert eliminado.id == 7
-
-
-def test_delete_rechaza_campos_adicionales():
-    with pytest.raises(ValidationError):
-        TipoDeCafeDelete(id=7, organico=True)
 
 
 # ---------------------------------------------------------------------------

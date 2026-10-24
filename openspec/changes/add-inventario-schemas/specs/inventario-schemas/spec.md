@@ -35,12 +35,12 @@ En las operaciones de lectura, el contrato SHALL incluir siempre el `id` de la e
 - **WHEN** se lee una entidad cuyos atributos nullable no tienen valor
 - **THEN** la respuesta incluye el `id` y todos los atributos, con `null` en los no informados
 
-### Requirement: La eliminación solo recibe el identificador
-En las operaciones de eliminación, el contrato SHALL recibir únicamente el `id` de la entidad.
+### Requirement: La eliminación no declara schema propio
+Las operaciones de eliminación SHALL recibir únicamente el `id` de la entidad como parámetro de ruta, sin cuerpo de petición. Los schemas de eliminación SHALL quedar ausentes de la capa de contratos.
 
-#### Scenario: Eliminación por identificador
-- **WHEN** se envía una petición de eliminación con el `id` de la entidad
-- **THEN** la validación es satisfactoria y no se admite ningún otro atributo
+#### Scenario: Eliminación sin cuerpo
+- **WHEN** se invoca la eliminación de un recurso identificado por su `id`
+- **THEN** el único dato de entrada es el `id` por ruta y el módulo no expone ningún schema de eliminación
 
 ### Requirement: El tipo de café recibe los nombres de origen como texto
 El contrato de creación y actualización de tipo de café SHALL recibir `variedad`, `region` y `pais` como texto. El tipo de café se identifica por su propio `id`; los nombres de origen son atributos descriptivos y SHALL NO usarse como identificadores de la entidad.

@@ -8,18 +8,15 @@ from app.modules.inventario import schemas as schemas_inventario
 ESQUEMAS_ESPERADOS = {
     "BlendComposicionItem",
     "BlendCreate",
-    "BlendDelete",
     "BlendRead",
     "BlendUpdate",
     "LoteCreate",
-    "LoteDelete",
     "LoteEstadoUpdate",
     "LoteKgDisponiblesUpdate",
     "LoteKgRealesUpdate",
     "LoteRead",
     "LoteUpdate",
     "TipoDeCafeCreate",
-    "TipoDeCafeDelete",
     "TipoDeCafeRead",
     "TipoDeCafeUpdate",
 }
@@ -33,8 +30,13 @@ def _todos_los_schemas() -> dict[str, type[BaseModel]]:
     }
 
 
-def test_el_modulo_expone_los_dieciseis_schemas():
+def test_el_modulo_expone_los_trece_schemas():
     assert set(_todos_los_schemas()) == ESQUEMAS_ESPERADOS
+
+
+def test_no_existen_schemas_de_borrado():
+    """El `id` del DELETE viaja por parámetro de ruta; un cuerpo con solo `id` sería redundante."""
+    assert not any(nombre.endswith("Delete") for nombre in _todos_los_schemas())
 
 
 @pytest.mark.parametrize("nombre", sorted(ESQUEMAS_ESPERADOS))

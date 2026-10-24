@@ -12,7 +12,7 @@
 - [x] 2.2 Implementar `TipoDeCafeUpdate` con los mismos cinco atributos, todos `Optional[...] = None`. Verificación: tests de actualización de un solo campo y de payload vacío, ambos válidos.
 - [x] 2.3 Implementar `TipoDeCafeRead` con `id`, `organico`, `precio_por_kg_verde`, `variedad`, `region`, `pais` como `str`, sin `variedad_id` ni `region_id`, y documentar en el design el aplanado desde el ORM. Verificación: test que confirma que `model_json_schema()` expone `id` como identificador y no expone `variedad_id` ni `region_id`.
 - [x] 2.4 Implementar el aplanado de `TipoDeCafeRead` desde el objeto ORM (`tipo.variedad.nombre`, `tipo.region.nombre`, `tipo.region.pais.nombre`). Verificación: test que arma el schema desde una instancia de `TipoDeCafe` con relaciones asignadas y comprueba los tres nombres.
-- [x] 2.5 Implementar `TipoDeCafeDelete` con solo `id` y `extra="forbid"`. Verificación: test que rechaza un payload con `id` más otro campo.
+- [x] 2.5 Verificar que no existe `TipoDeCafeDelete`: el `id` de la baja viaja por parámetro de ruta y un cuerpo con solo `id` sería redundante. Verificación: `test_no_existen_schemas_de_borrado` en `test_schemas_integracion.py`.
 - [x] 2.6 Escribir `backend/tests/modules/inventario/test_schemas_tipo_de_cafe.py` cubriendo 2.1 a 2.5 y verificar con `python -m pytest tests/modules/inventario/test_schemas_tipo_de_cafe.py -q` desde `backend/`. → 23 passed.
 - [x] 2.7 Agregar `description` en cada `Field` de los cuatro schemas de TipoDeCafe para que Swagger documente el contrato. Verificación: `TipoDeCafeRead.model_json_schema()` incluye descripción en todos los campos.
 
@@ -22,7 +22,7 @@
 - [x] 3.2 Implementar `BlendCreate` con `nombre`, `precio_por_kg_verde`, `descripcion` y `tipos_de_cafe` como lista del ítem anterior. Verificación: test que acepta un blend con tres proporciones válidas.
 - [x] 3.3 Implementar la validación de composición en `BlendCreate` y `BlendUpdate`: al menos un elemento, `tipo_de_cafe_id` sin repetir y suma de porcentajes igual a `100` comparando con `Decimal` cuantizado a dos decimales. Verificación: tres tests negativos (lista vacía, id repetido, suma 99.99) y uno positivo con `33.33 + 33.33 + 33.34`.
 - [x] 3.4 Implementar `BlendUpdate` con los cuatro atributos opcionales, donde `tipos_de_cafe` reemplaza la composición completa. Verificación: test que actualiza solo `nombre` y otro que actualiza solo la composición.
-- [x] 3.5 Implementar `BlendRead` con `id` más los cuatro atributos y `BlendDelete` con solo `id`, ambos `extra="forbid"` en el de borrado. Verificación: test de serialización de un blend con composición y test de rechazo de campos extra en el borrado.
+- [x] 3.5 Implementar `BlendRead` con `id` más los cuatro atributos. Verificación: test de serialización de un blend con composición. `BlendDelete` no existe: la baja toma el `id` por ruta.
 - [x] 3.6 Escribir `backend/tests/modules/inventario/test_schemas_blend.py` cubriendo 3.1 a 3.5 y verificar con `python -m pytest tests/modules/inventario/test_schemas_blend.py -q` desde `backend/`.
 - [x] 3.7 Documentar con `description` los campos de los cinco schemas de blend. Verificación: `BlendRead.model_json_schema()` describe el ítem de composición y sus dos campos.
 
@@ -31,7 +31,7 @@
 - [x] 4.1 Implementar `LoteCreate` con `tipo` y `estado` tipados con `LoteTipo`/`LoteEstado` importados de `models.py`, más `fecha_vencimiento`, `humedad`, `kg_disponibles`, `kg_reales` y `ubicacion_fisica` obligatorios. Verificación: test que acepta el payload mínimo.
 - [x] 4.2 Marcar como no obligatorios en `LoteCreate` los cuatro atributos nullable del modelo (`observaciones`, `tipo_de_cafe_id`, `blend_id`, `orden_tueste_id`) con valor por defecto `None`. Verificación: test que crea un lote omitiendo los cuatro y otro que los envía en `null`.
 - [x] 4.3 Implementar `LoteUpdate` con `estado`, `fecha_vencimiento`, `humedad`, `kg_disponibles`, `kg_reales`, `ubicacion_fisica` y `observaciones` opcionales, y `extra="forbid"` para rechazar `tipo`, `tipo_de_cafe_id`, `blend_id` y `orden_tueste_id`. Verificación: un test por cada campo prohibido esperando error de validación, más un test de actualización parcial válida.
-- [x] 4.4 Implementar `LoteRead` con `id` y los once atributos restantes, admitiendo `null` en los cuatro nullable, y `LoteDelete` con solo `id`. Verificación: test de serialización de un lote con los cuatro nullable en `None` y test de rechazo de campos extra en el borrado.
+- [x] 4.4 Implementar `LoteRead` con `id` y los once atributos restantes, admitiendo `null` en los cuatro nullable. Verificación: test de serialización de un lote con los cuatro nullable en `None`. `LoteDelete` no existe: la baja toma el `id` por ruta.
 - [x] 4.5 Verificar que `LoteRead` no omite `orden_tueste_id` pese a que la tabla `orden_tueste` aún no existe, y dejar registrada la deuda en el design. Verificación: `model_fields` de `LoteRead` contiene `orden_tueste_id` y el design ya lo documenta en Risks.
 - [x] 4.6 Escribir `backend/tests/modules/inventario/test_schemas_lote.py` cubriendo 4.1 a 4.5 y verificar con `python -m pytest tests/modules/inventario/test_schemas_lote.py -q` desde `backend/`. → 40 passed.
 - [x] 4.7 Documentar con `description` los campos de los cuatro schemas de lote, incluyendo los valores admitidos de `tipo` y `estado`. Verificación: `LoteCreate.model_json_schema()` muestra los enums con `VERDE`/`TOSTADO` y `CERRADO`/`ABIERTO`.
@@ -46,7 +46,7 @@
 ## 6. Verificación de integración
 
 - [x] 6.1 Verificar que el módulo importa limpio: `python -c "from app.modules.inventario import schemas"` desde `backend/`, sin warnings de Pydantic. → verificado con `-W error`.
-- [x] 6.2 Verificar que los 16 schemas generan JSON Schema sin error, recorriendo con un test que llame a `model_json_schema()` sobre cada uno, y que ningún schema de entrada admite campos no declarados.
+- [x] 6.2 Verificar que los 13 schemas generan JSON Schema sin error, recorriendo con un test que llame a `model_json_schema()` sobre cada uno, que ningún schema admite campos no declarados y que no existe ningún schema de borrado.
 - [x] 6.3 Correr la suite completa del módulo con `python -m pytest tests/modules/inventario -q` desde `backend/` y confirmar que no hay fallos. → 137 passed.
 
 ## Workflow follow-up

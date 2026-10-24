@@ -8,7 +8,8 @@ Reglas de opcionalidad aplicadas a todas las entidades:
 - **Update**: todos los atributos editables son opcionales.
 - **Read**: siempre incluye el `id` y devuelve todos los datos de la clase;
   los atributos nullable pueden volver ``None``.
-- **Delete**: recibe únicamente el ``id``.
+- **Delete**: no tiene schema propio. El ``id`` viaja como parámetro de ruta del
+  endpoint, de modo que un cuerpo con solo ``id`` sería redundante.
 """
 
 from datetime import datetime
@@ -140,14 +141,6 @@ class TipoDeCafeRead(BaseModel):
         )
 
 
-class TipoDeCafeDelete(BaseModel):
-    """Baja de tipo de café. Solo recibe el identificador."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: int = Field(description="Identificador del tipo de café a eliminar.")
-
-
 # ---------------------------------------------------------------------------
 # Blend
 # ---------------------------------------------------------------------------
@@ -213,14 +206,6 @@ class BlendRead(BaseModel):
     precio_por_kg_verde: PrecioPorKgVerde = Field(description="Precio por kilo de café verde del blend.")
     descripcion: str = Field(description="Descripción del blend.")
     tipos_de_cafe: list[BlendComposicionItem] = Field(description="Composición actual del blend.")
-
-
-class BlendDelete(BaseModel):
-    """Baja de blend. Solo recibe el identificador."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: int = Field(description="Identificador del blend a eliminar.")
 
 
 # ---------------------------------------------------------------------------
@@ -299,14 +284,6 @@ class LoteRead(BaseModel):
     orden_tueste_id: Optional[int] = Field(
         default=None, description="Identificador de la orden de tueste asociada, si corresponde."
     )
-
-
-class LoteDelete(BaseModel):
-    """Baja de lote. Solo recibe el identificador."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: int = Field(description="Identificador del lote a eliminar.")
 
 
 # ---------------------------------------------------------------------------
