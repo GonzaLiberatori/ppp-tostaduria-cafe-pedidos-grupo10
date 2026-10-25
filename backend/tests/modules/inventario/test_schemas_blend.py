@@ -84,12 +84,42 @@ def test_create_rechaza_tipo_de_cafe_repetido():
         ]))
 
 
-def test_create_rechaza_porcentajes_que_no_suman_cien():
+def test_create_rechaza_porcentajes_fuera_de_la_tolerancia():
+    """Fuera del rango 99.99-100.00 no es redondeo: es una proporción mal cargada."""
     with pytest.raises(ValidationError):
         BlendCreate(**_payload_sin_composicion(tipos_de_cafe=[
             {"tipo_de_cafe_id": 1, "porcentaje": "60.00"},
-            {"tipo_de_cafe_id": 2, "porcentaje": "39.99"},
+            {"tipo_de_cafe_id": 2, "porcentaje": "39.98"},
         ]))
+
+
+def test_create_rechaza_suma_mayor_a_cien():
+    with pytest.raises(ValidationError):
+        BlendCreate(**_payload_sin_composicion(tipos_de_cafe=[
+            {"tipo_de_cafe_id": 1, "porcentaje": "60.00"},
+            {"tipo_de_cafe_id": 2, "porcentaje": "40.01"},
+        ]))
+
+
+def test_create_acepta_una_suma_de_99_99_por_redondeo():
+    """Tolerancia decidida: 99.99 se acepta igual que 100.00."""
+    creado = BlendCreate(**_payload_sin_composicion(tipos_de_cafe=[
+        {"tipo_de_cafe_id": 1, "porcentaje": "60.00"},
+        {"tipo_de_cafe_id": 2, "porcentaje": "39.99"},
+    ]))
+    assert sum((i.porcentaje for i in creado.tipos_de_cafe), Decimal("0")) == Decimal("99.99")
+
+
+def test_create_rechaza_composicion_de_un_solo_tipo():
+    with pytest.raises(ValidationError):
+        BlendCreate(**_payload_sin_composicion(tipos_de_cafe=[
+            {"tipo_de_cafe_id": 1, "porcentaje": "100.00"},
+        ]))
+
+
+def test_update_rechaza_composicion_de_un_solo_tipo():
+    with pytest.raises(ValidationError):
+        BlendUpdate(tipos_de_cafe=[{"tipo_de_cafe_id": 1, "porcentaje": "100.00"}])
 
 
 def test_create_acepta_suma_exacta_de_cien_con_tercios():

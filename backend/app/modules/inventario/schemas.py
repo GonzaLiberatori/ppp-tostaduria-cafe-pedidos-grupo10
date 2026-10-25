@@ -34,20 +34,32 @@ PorcentajeBlend = Annotated[Decimal, Field(max_digits=5, decimal_places=2, gt=0)
 _LONGITUD_NOMBRE = 50
 _LONGITUD_UBICACION = 50
 
+# Tolerancia de suma de porcentajes de un blend: acepta 100,00 y también 99,99,
+# que es lo que dan tres terceros redondeados a dos decimales.
+_SUMA_MINIMA = Decimal("99.99")
+_SUMA_MAXIMA = Decimal("100.00")
+
+# Mínimo de tipos de café que integra un blend.
+_MINIMA_COMPOSICION = 2
+
 
 def _validar_composicion(tipos_de_cafe: "list[BlendComposicionItem]") -> None:
     """Valida que una composición de blend sea consistente.
 
-    Exige tipos de café sin repetir y porcentajes que sumen exactamente 100.
-    La comparación se hace sobre la suma cuantificada a dos decimales.
+    Exige tipos de café sin repetir y una suma de porcentajes entre 99,99 y
+    100,00 inclusive: 0,01 de tolerancia por el redondeo a dos decimales.
+    Con precisión de dos decimales esos dos son los únicos valores del rango,
+    así que no queda zona gris.
     """
     identificadores = [item.tipo_de_cafe_id for item in tipos_de_cafe]
     if len(identificadores) != len(set(identificadores)):
         raise ValueError("Un blend no puede repetir el mismo tipo de café en su composición.")
 
     total = sum((item.porcentaje for item in tipos_de_cafe), Decimal("0")).quantize(Decimal("0.01"))
-    if total != Decimal("100.00"):
-        raise ValueError(f"Los porcentajes de la composición deben sumar exactamente 100, suman {total}.")
+    if not (_SUMA_MINIMA <= total <= _SUMA_MAXIMA):
+        raise ValueError(
+            f"Los porcentajes de la composición deben sumar entre 99.99 y 100.00, suman {total}."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +159,8 @@ class BlendCreate(BaseModel):
     precio_por_kg_verde: PrecioPorKgVerde = Field(description="Precio por kilo de café verde del blend.")
     descripcion: str = Field(description="Descripción del blend.")
     tipos_de_cafe: list[BlendComposicionItem] = Field(
-        min_length=1, description="Composición del blend; reemplaza la lista completa en cada escritura."
+        min_length=_MINIMA_COMPOSICION,
+        description="Composición del blend; reemplaza la lista completa en cada escritura.",
     )
 
     @model_validator(mode="after")
@@ -170,7 +183,7 @@ class BlendUpdate(BaseModel):
     descripcion: Optional[str] = Field(default=None, description="Descripción del blend.")
     tipos_de_cafe: Optional[list[BlendComposicionItem]] = Field(
         default=None,
-        min_length=1,
+        min_length=_MINIMA_COMPOSICION,
         description="Reemplaza por completo la composición anterior cuando se envía.",
     )
 

@@ -286,16 +286,25 @@ def test_crud_aplica_solo_las_claves_recibidas(db):
 
 def test_crud_cuenta_referencias_con_ceros_incluidos(db):
     tipo = _dar_de_alta(db)
-    assert crud.cuentas_de_referencias(db, tipo.id) == {
+    assert crud.cuentas_de_referencias(db, TipoDeCafe, tipo.id) == {
         "BlendHasTipoDeCafe": 0,
         "Lote": 0,
     }
 
     _referenciar_con_blend(db, tipo.id)
-    assert crud.cuentas_de_referencias(db, tipo.id) == {
+    assert crud.cuentas_de_referencias(db, TipoDeCafe, tipo.id) == {
         "BlendHasTipoDeCafe": 1,
         "Lote": 0,
     }
+
+
+def test_crud_usa_la_columna_correcta_por_entidad(db):
+    """`Lote` bloquea a TipoDeCafe por `tipo_de_cafe_id` y a Blend por `blend_id`."""
+    tipo = _dar_de_alta(db)
+    _referenciar_con_lote(db, tipo.id)
+
+    assert crud.cuentas_de_referencias(db, TipoDeCafe, tipo.id)["Lote"] == 1
+    assert crud.cuentas_de_referencias(db, Blend, tipo.id)["Lote"] == 0
 
 
 def test_crud_no_hace_commit(db):

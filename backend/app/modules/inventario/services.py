@@ -11,7 +11,15 @@ repite.
 from sqlalchemy.orm import Session
 
 from app.modules.inventario import crud
-from app.modules.inventario.schemas import TipoDeCafeCreate, TipoDeCafeRead, TipoDeCafeUpdate
+from app.modules.inventario.models import Blend, TipoDeCafe
+from app.modules.inventario.schemas import (
+    BlendCreate,
+    BlendRead,
+    BlendUpdate,
+    TipoDeCafeCreate,
+    TipoDeCafeRead,
+    TipoDeCafeUpdate,
+)
 
 
 class TipoDeCafeNoEncontrado(Exception):
@@ -29,6 +37,31 @@ class TipoDeCafeReferenciado(Exception):
         self.entidades = entidades
         bloqueantes = ", ".join(entidades)
         super().__init__(f"No se puede eliminar el tipo de café: lo referencian {bloqueantes}.")
+
+
+class BlendNoEncontrado(Exception):
+    """El ``id`` recibido no corresponde a ningún blend."""
+
+    def __init__(self, blend_id: int) -> None:
+        self.blend_id = blend_id
+        super().__init__(f"No existe un blend con id {blend_id}.")
+
+
+class BlendReferenciado(Exception):
+    """El blend no se puede borrar porque otra entidad lo referencia."""
+
+    def __init__(self, entidades: list[str]) -> None:
+        self.entidades = entidades
+        bloqueantes = ", ".join(entidades)
+        super().__init__(f"No se puede eliminar el blend: lo referencian {bloqueantes}.")
+
+
+class NombreDeBlendEnUso(Exception):
+    """El nombre enviado ya pertenece a otro blend."""
+
+    def __init__(self, nombre: str) -> None:
+        self.nombre = nombre
+        super().__init__(f"Ya existe un blend con el nombre '{nombre}'.")
 
 
 def crear_tipo_de_cafe(db: Session, datos: TipoDeCafeCreate) -> TipoDeCafeRead:
@@ -87,7 +120,7 @@ def eliminar_tipo_de_cafe(db: Session, tipo_id: int) -> None:
     if tipo is None:
         raise TipoDeCafeNoEncontrado(tipo_id)
 
-    cuentas = crud.cuentas_de_referencias(db, tipo_id)
+    cuentas = crud.cuentas_de_referencias(db, TipoDeCafe, tipo_id)
     bloqueantes = [nombre for nombre, total in cuentas.items() if total > 0]
 
     if bloqueantes:
@@ -95,6 +128,99 @@ def eliminar_tipo_de_cafe(db: Session, tipo_id: int) -> None:
 
     try:
         crud.eliminar_tipo_de_cafe(db, tipo)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Blend
+# ---------------------------------------------------------------------------
+def crear_blend(db: Session, datos: BlendCreate) -> BlendRead:
+    """Da de alta un blend y su composición en una sola transacción."""
+    if crud.nombre_de_blend_ya_en_usado(db, datos.nombre):
+        raise NombreDeBlendEnUso(datos.nombre)
+
+    try:
+        blend = crud.crear_blend(db, datos)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return BlendRead.desde_orm(blend)
+
+
+def obtener_blend(db: Session, blend_id: int) -> BlendRead:
+    """Lee un blend por su ``id``, junto con su composición."""
+    blend = crud.obtener_blend(db, blend_id)
+
+    if blend is None:
+        raise BlendNoEncontrado(blend_id)
+
+    return BlendRead.desde_orm(blend)
+
+
+def actualizar_blend(db: Session, blend_id: int, datos: BlendUpdate) -> BlendRead:
+    """Aplica los atributos con valor y reemplaza la composición si viene lista.
+
+    La existencia se comprueba ANTES de aplicar cambios: con un cuerpo vacío
+    sobre un ``id`` inexistente, el orden inverso devolvería un registro
+    inexistente en lugar de ``BlendNoEncontrado``.
+    """
+    blend = crud.obtener_blend(db, blend_id)
+
+    if blend is None:
+        raise BlendNoEncontrado(blend_id)
+
+    composicion = datos.tipos_de_cafe
+    cambios = datos.model_dump(exclude_none=True, exclude={"tipos_de_cafe"})
+
+    if not cambios and composicion is None:
+        return BlendRead.desde_orm(blend)
+
+    # `excluir_id` es imprescindible: editar sin cambiarle el nombre no es
+    # un conflicto del blend consigo mismo.
+    if "nombre" in cambios and crud.nombre_de_blend_ya_en_usado(
+        db, cambios["nombre"], excluir_id=blend_id
+    ):
+        raise NombreDeBlendEnUso(cambios["nombre"])
+
+    try:
+        if cambios:
+            crud.actualizar_blend(db, blend, cambios)
+
+        if composicion is not None:
+            crud.reemplazar_composicion(db, blend, composicion)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return BlendRead.desde_orm(blend)
+
+
+def eliminar_blend(db: Session, blend_id: int) -> None:
+    """Borra un blend y su composición, salvo que una entidad externa lo use.
+
+    La composición propia no bloquea: son los hijos del blend, se borran juntos.
+    """
+    blend = crud.obtener_blend(db, blend_id)
+
+    if blend is None:
+        raise BlendNoEncontrado(blend_id)
+
+    cuentas = crud.cuentas_de_referencias(db, Blend, blend_id)
+    bloqueantes = [nombre for nombre, total in cuentas.items() if total > 0]
+
+    if bloqueantes:
+        raise BlendReferenciado(bloqueantes)
+
+    try:
+        crud.eliminar_composicion(db, blend)
+        crud.eliminar_blend(db, blend)
         db.commit()
     except Exception:
         db.rollback()

@@ -1,29 +1,45 @@
-"""Acceso a datos del módulo de inventario sobre ``TipoDeCafe``.
+"""Acceso a datos del módulo de inventario sobre ``TipoDeCafe`` y ``Blend``.
 
 Consultas puras: sin reglas de negocio y sin commits. Tanto la decisión de qué
 operaciones proceden como la frontera transaccional viven en ``services.py``.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.inventario.models import BlendHasTipoDeCafe, Lote, TipoDeCafe
-from app.modules.inventario.schemas import TipoDeCafeCreate
+from app.modules.inventario.models import (
+    Blend,
+    BlendHasTipoDeCafe,
+    Lote,
+    TipoDeCafe,
+)
+from app.modules.inventario.schemas import (
+    BlendComposicionItem,
+    BlendCreate,
+    TipoDeCafeCreate,
+)
 
-# Entidades que impiden el borrado de un TipoDeCafe. El guard las recorre TODAS
-# en lugar de elegir una: un tipo de café puede estar en un blend y tener lotes
-# a la vez, y el aviso de bloqueo debe poder nombrar a las dos.
+# Entidades que impiden el borrado de cada entidad borrable, con la columna FK
+# de la que cuelgan. La clave es la pareja (referenciadora, columna): `Lote`
+# bloquea a `TipoDeCafe` por `tipo_de_cafe_id` y a `Blend` por `blend_id`, así
+# que no alcanza una sola constante de columna.
 #
-# Cuando `pedidos` defina `detalle_pedido` con `tipo_de_cafe_id` como FK, basta
-# con agregarla a esta tupla: `cuentas_de_referencias` la cubre sin más cambios.
-REFERENCIAS_PROHIBIDAS: tuple[type, ...] = (BlendHasTipoDeCafe, Lote)
+# `BlendHasTipoDeCafe` NO figura en la lista de `Blend`: es la composición
+# propia del blend, no un tercero que la use, y se borra antes que él.
+#
+# Cuando `pedidos` defina `detalle_pedido`, se agrega la pareja correspondiente
+# a cada lista sin tocar la lógica.
+REFERENCIAS_PROHIBIDAS: dict[type, tuple[tuple[type, str], ...]] = {
+    TipoDeCafe: ((BlendHasTipoDeCafe, "tipo_de_cafe_id"), (Lote, "tipo_de_cafe_id")),
+    Blend: ((Lote, "blend_id"),),
+}
 
-# Nombre de la columna FK en todas las entidades referenciadoras.
-_COLUMNA_TIPO_DE_CAFE = "tipo_de_cafe_id"
 
-
+# ---------------------------------------------------------------------------
+# TipoDeCafe
+# ---------------------------------------------------------------------------
 def obtener_tipo_de_cafe(db: Session, tipo_id: int) -> TipoDeCafe | None:
     """Devuelve el tipo de café con ese ``id``, o ``None`` si no existe."""
     return db.get(TipoDeCafe, tipo_id)
@@ -60,7 +76,10 @@ def eliminar_tipo_de_cafe(db: Session, tipo: TipoDeCafe) -> None:
     db.flush()
 
 
-def cuentas_de_referencias(db: Session, tipo_id: int) -> dict[str, int]:
+# ---------------------------------------------------------------------------
+# Referencias: compartidas por todas las entidades borrables
+# ---------------------------------------------------------------------------
+def cuentas_de_referencias(db: Session, entidad_borrable: type, entidad_id: int) -> dict[str, int]:
     """Cuenta cuántas filas de cada entidad referenciadora bloquean el borrado.
 
     Devuelve un contador por entidad, con ceros incluidos, para que quien llama
@@ -68,9 +87,106 @@ def cuentas_de_referencias(db: Session, tipo_id: int) -> dict[str, int]:
     """
     cuentas: dict[str, int] = {}
 
-    for entidad in REFERENCIAS_PROHIBIDAS:
-        columna = entidad.__table__.c[_COLUMNA_TIPO_DE_CAFE]
-        total = db.scalar(select(func.count()).select_from(entidad).where(columna == tipo_id))
-        cuentas[entidad.__name__] = int(total or 0)
+    for referenciadora, columna in REFERENCIAS_PROHIBIDAS.get(entidad_borrable, ()):
+        clave_ajena = referenciadora.__table__.c[columna]
+        total = db.scalar(select(func.count()).select_from(referenciadora).where(clave_ajena == entidad_id))
+        cuentas[referenciadora.__name__] = int(total or 0)
 
     return cuentas
+
+
+# ---------------------------------------------------------------------------
+# Blend
+# ---------------------------------------------------------------------------
+def obtener_blend(db: Session, blend_id: int) -> Blend | None:
+    """Devuelve el blend con ese ``id``, o ``None`` si no existe."""
+    return db.get(Blend, blend_id)
+
+
+def nombre_de_blend_ya_en_usado(db: Session, nombre: str, excluir_id: Optional[int] = None) -> bool:
+    """Consulta si otro blend ya usa ese nombre.
+
+    En edición hay que pasar el ``id`` propio, o editar un blend sin cambiarle
+    el nombre se declararía conflicto consigo mismo.
+    """
+    consulta = select(Blend.id).where(Blend.nombre == nombre)
+
+    if excluir_id is not None:
+        consulta = consulta.where(Blend.id != excluir_id)
+
+    return db.scalar(consulta) is not None
+
+
+def crear_blend(db: Session, datos: BlendCreate) -> Blend:
+    """Da de alta un blend y su composición, en esa orden.
+
+    El ``flush`` del blend es obligatorio: sin su ``id`` no hay con qué poblar
+    las filas de composición.
+    """
+    blend = Blend(
+        nombre=datos.nombre,
+        precio_por_kg_verde=datos.precio_por_kg_verde,
+        descripcion=datos.descripcion,
+    )
+    db.add(blend)
+    db.flush()
+
+    _escribir_composicion(db, blend, datos.tipos_de_cafe)
+    return blend
+
+
+def actualizar_blend(db: Session, blend: Blend, cambios: dict[str, Any]) -> Blend:
+    """Aplica solo las claves escalares recibidas, sin commit.
+
+    La lista de composición no se pasa por acá: quien la reemplaza es
+    ``reemplazar_composicion``.
+    """
+    for atributo, valor in cambios.items():
+        setattr(blend, atributo, valor)
+    db.flush()
+    return blend
+
+
+def reemplazar_composicion(db: Session, blend: Blend, items: list[BlendComposicionItem]) -> None:
+    """Borra la composición previa y crea una por cada item recibido.
+
+    Se borra antes de crear para no dejar dos composiciones conviviendo si algo
+    falla a mitad de camino.
+    """
+    eliminar_composicion(db, blend)
+    _escribir_composicion(db, blend, items)
+
+
+def eliminar_composicion(db: Session, blend: Blend) -> None:
+    """Borra los registros de composición del blend. No hace commit."""
+    for fila in list(blend.tipos_de_cafe):
+        db.delete(fila)
+    db.flush()
+
+    # El SQL borró las filas, pero la colección sigue cargada en memoria con los
+    # objetos. Sin este expire, `eliminar_blend` ve hijos "vivos" y SQLAlchemy
+    # intenta anular `blend_id` — que forma parte de la clave primaria — y lanza
+    # `AssertionError: Dependency rule ... tried to blank-out primary key`.
+    db.expire(blend, ["tipos_de_cafe"])
+
+
+def eliminar_blend(db: Session, blend: Blend) -> None:
+    """Marca el blend para borrado. No hace commit."""
+    db.delete(blend)
+    db.flush()
+
+
+def _escribir_composicion(db: Session, blend: Blend, items: list[BlendComposicionItem]) -> None:
+    """Agrega un ``BlendHasTipoDeCafe`` por item, vía la relación del blend.
+
+    Se agrega por la colección y no con la columna suelta, para que el estado en
+    memoria del blend quede consistente sin tener que refrescarlo.
+    """
+    for item in items:
+        blend.tipos_de_cafe.append(
+            BlendHasTipoDeCafe(
+                tipo_de_cafe_id=item.tipo_de_cafe_id,
+                porcentaje=item.porcentaje,
+            )
+        )
+    db.flush()
