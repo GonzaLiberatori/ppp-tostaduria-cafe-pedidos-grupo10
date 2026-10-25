@@ -100,6 +100,12 @@ Pediste atención a esto, así que queda escrita como regla del módulo:
 
 **Alternativa descartada:** que `services.py` lance `HTTPException` directamente. Funciona, pero acopla el módulo a FastAPI y hace imposible reutilizarlo desde un job de APScheduler o una tarea programada.
 
+### Los decimales salen como string en JSON
+
+FastAPI serializa `Decimal` como texto en la respuesta: `precio_por_kg_verde` llega como `"1250.50"`, no como `1250.50`.
+
+**Por qué importa:** el cliente tiene que tratarlo como string, y es lo deseable acá — un `float` en JSON pierde precisión, y dos decimales en coma flotante pueden volver redondeados. El spec no fija el tipo de serialización, pero queda verificado en `test_editar_con_precio_no_positivo_devuelve_422`.
+
 ### Tests con app local y base SQLite en memoria
 
 ```python

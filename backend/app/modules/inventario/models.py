@@ -76,7 +76,13 @@ class Lote(Base):
     observaciones: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tipo_de_cafe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tipo_de_cafe.id"), nullable=True, index=True)
     blend_id: Mapped[Optional[int]] = mapped_column(ForeignKey("blend.id"), nullable=True, index=True)
-    orden_tueste_id: Mapped[Optional[int]] = mapped_column(ForeignKey("orden_tueste.id"), nullable=True, index=True)
+    # Sin FK: la tabla "orden_tueste" no existe todavía porque producción no
+    # define OrdenTueste, y la referencia rota hace fallar
+    # Base.metadata.create_all() con NoReferencedTableError, lo que impide crear
+    # esta tabla en absoluto. Hay que rehacer la FK con
+    # ForeignKey("orden_tueste.id") cuando exista ese modelo, y regenerar la
+    # migración en ese momento.
+    orden_tueste_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     tipo_de_cafe: Mapped[Optional["TipoDeCafe"]] = relationship(back_populates="lotes")
     blend: Mapped[Optional["Blend"]] = relationship(back_populates="lotes")
