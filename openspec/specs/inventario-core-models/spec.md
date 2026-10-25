@@ -2,23 +2,16 @@
 
 ## Purpose
 
-Define las entidades base del módulo de inventario (países, regiones, variedades, tipos de café, blends, lotes y su asociación) para soportar la trazabilidad del café en el sistema.
+Define las entidades base del módulo de inventario (tipos de café con su origen como texto, blends, lotes y su asociación) para soportar la trazabilidad del café en el sistema.
 
 ## Requirements
 
-### Requirement: El sistema SHALL tener las entidades geográficas y de origen
-El sistema SHALL contar con los modelos `Pais` (id, nombre), `Region` (id, nombre, pais_id con FK a pais) y `Variedad` (id, nombre) para representar orígenes y variedades de café.
-
-#### Scenario: Crear país, región y variedad
-- **WHEN** se crean instancias de `Pais`, `Region` y `Variedad` con sus campos obligatorios
-- **THEN** se pueden persistir respetando las relaciones FK entre región y país
-
-### Requirement: El sistema SHALL tener TipoDeCafe con relación a región y variedad
-El sistema SHALL contar con el modelo `TipoDeCafe` con `organico` (booleano), `precio_por_kg_verde` (Decimal), `region_id` y `variedad_id` con FKs a `region` y `variedad` respectivamente.
+### Requirement: El sistema SHALL tener TipoDeCafe con origen como texto
+El sistema SHALL contar con el modelo `TipoDeCafe` con `organico` (booleano), `precio_por_kg_verde` (Decimal) y los campos `variedad`, `region` y `pais` como cadenas de texto de hasta 50 caracteres, sin claves foráneas ni tablas de referencia.
 
 #### Scenario: Crear tipo de café
-- **WHEN** se crea un `TipoDeCafe` asociado a una `Region` y una `Variedad` válidas
-- **THEN** la entidad queda correctamente relacionada y sus campos numéricos/booleanos se almacenan con el tipo correcto
+- **WHEN** se crea un `TipoDeCafe` con `variedad`, `region` y `pais` como texto
+- **THEN** la entidad se persiste sin relaciones externas y sus campos numéricos/booleanos se almacenan con el tipo correcto
 
 ### Requirement: El sistema SHALL tener Blend y su asociación con tipos de café
 El sistema SHALL contar con el modelo `Blend` (id, nombre, precio_por_kg_verde Decimal, descripcion Text) y la tabla de asociación `BlendHasTipoDeCafe` (blend_id, tipo_de_cafe_id, porcentaje Decimal) con clave compuesta.
