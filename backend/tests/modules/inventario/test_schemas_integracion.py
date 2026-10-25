@@ -1,9 +1,31 @@
 """Verificación de integración de la capa de schemas de inventario."""
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.modules.inventario import schemas as schemas_inventario
+
+# Payloads válidos de los dos Read que ahora se construyen desde el ORM.
+READS_DESDE_EL_ORM = {
+    "TipoDeCafeRead": {
+        "id": 1,
+        "organico": True,
+        "precio_por_kg_verde": "1250.50",
+        "variedad": "Caturra",
+        "region": "Huila",
+        "pais": "Colombia",
+    },
+    "LoteRead": {
+        "id": 1,
+        "tipo": "VERDE",
+        "estado": "ABIERTO",
+        "fecha_vencimiento": "2026-12-31T08:00:00",
+        "humedad": "11.50",
+        "kg_disponibles": "60.00",
+        "kg_reales": "59.80",
+        "ubicacion_fisica": "PASILLO-01",
+    },
+}
 
 ESQUEMAS_ESPERADOS = {
     "BlendComposicionItem",
@@ -37,6 +59,20 @@ def test_el_modulo_expone_los_trece_schemas():
 def test_no_existen_schemas_de_borrado():
     """El `id` del DELETE viaja por parámetro de ruta; un cuerpo con solo `id` sería redundante."""
     assert not any(nombre.endswith("Delete") for nombre in _todos_los_schemas())
+
+
+@pytest.mark.parametrize("nombre", sorted(READS_DESDE_EL_ORM))
+def test_los_read_desde_el_orm_siguen_rechazando_campos_extra(nombre: str):
+    """from_attributes no relaja extra="forbid" en la validación por diccionario."""
+    esquema = _todos_los_schemas()[nombre]
+    with pytest.raises(ValidationError):
+        esquema(**{**READS_DESDE_EL_ORM[nombre], "campo_inexistente": "x"})
+
+
+@pytest.mark.parametrize("nombre", sorted(READS_DESDE_EL_ORM))
+def test_los_read_desde_el_orm_tienen_la_flag(nombre: str):
+    esquema = _todos_los_schemas()[nombre]
+    assert esquema.model_config.get("from_attributes") is True
 
 
 @pytest.mark.parametrize("nombre", sorted(ESQUEMAS_ESPERADOS))

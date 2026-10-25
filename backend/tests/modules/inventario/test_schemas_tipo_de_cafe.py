@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.modules.inventario.models import Pais, Region, TipoDeCafe, Variedad
+from app.modules.inventario.models import TipoDeCafe
 from app.modules.inventario.schemas import (
     TipoDeCafeCreate,
     TipoDeCafeRead,
@@ -101,24 +101,28 @@ def test_read_tiene_descripcion_en_todos_los_campos():
 
 
 def _tipo_de_cafe_de_ejemplo() -> TipoDeCafe:
-    pais = Pais(id=1, nombre="Colombia")
-    region = Region(id=2, nombre="Huila", pais=pais)
-    variedad = Variedad(id=3, nombre="Caturra")
     return TipoDeCafe(
         id=7,
         organico=True,
         precio_por_kg_verde=Decimal("1250.50"),
-        region=region,
-        variedad=variedad,
+        variedad="Caturra",
+        region="Huila",
+        pais="Colombia",
     )
 
 
-def test_read_desde_orm_aplama_los_tres_nombres():
-    leido = TipoDeCafeRead.desde_orm(_tipo_de_cafe_de_ejemplo())
+def test_read_se_construye_desde_el_orm_sin_adaptador():
+    """`TipoDeCafeRead` y el modelo comparten campos: se valida el ORM directamente."""
+    leido = TipoDeCafeRead.model_validate(_tipo_de_cafe_de_ejemplo())
     assert leido.id == 7
     assert leido.variedad == "Caturra"
     assert leido.region == "Huila"
     assert leido.pais == "Colombia"
+
+
+def test_read_no_tiene_adaptador_propio():
+    """Regla de la capa de schemas: sin transformación, sin método desde_orm."""
+    assert not hasattr(TipoDeCafeRead, "desde_orm")
 
 
 # ---------------------------------------------------------------------------

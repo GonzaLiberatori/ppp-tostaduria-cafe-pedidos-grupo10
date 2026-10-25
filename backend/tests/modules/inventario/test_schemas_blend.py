@@ -165,6 +165,28 @@ def test_read_serializa_composicion_completa():
     ]
 
 
+def test_read_desde_orm_convierte_la_composicion():
+    """Único adaptador de la capa: de filas de BlendHasTipoDeCafe a pares id+porcentaje."""
+    blend = Blend(
+        id=9,
+        nombre="Mezcla Huila",
+        precio_por_kg_verde=Decimal("980.00"),
+        descripcion="Mezcla equilibrada para filtro.",
+    )
+    blend.tipos_de_cafe = [
+        BlendHasTipoDeCafe(blend_id=9, tipo_de_cafe_id=1, porcentaje=Decimal("50.00")),
+        BlendHasTipoDeCafe(blend_id=9, tipo_de_cafe_id=2, porcentaje=Decimal("50.00")),
+    ]
+
+    leido = BlendRead.desde_orm(blend)
+
+    # Solo viajan tipo_de_cafe_id y porcentaje: se descartan blend_id y las relaciones.
+    assert [item.model_dump() for item in leido.tipos_de_cafe] == [
+        {"tipo_de_cafe_id": 1, "porcentaje": Decimal("50.00")},
+        {"tipo_de_cafe_id": 2, "porcentaje": Decimal("50.00")},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Documentación Swagger (3.7)
 # ---------------------------------------------------------------------------

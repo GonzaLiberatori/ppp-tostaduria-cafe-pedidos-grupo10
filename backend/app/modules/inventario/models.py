@@ -19,46 +19,16 @@ class LoteEstado(str, enum.Enum):
     ABIERTO = "ABIERTO"
 
 
-class Pais(Base):
-    __tablename__ = "pais"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    nombre: Mapped[str] = mapped_column(String(50), nullable=False)
-
-    regiones: Mapped[list["Region"]] = relationship(back_populates="pais")
-
-
-class Region(Base):
-    __tablename__ = "region"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    nombre: Mapped[str] = mapped_column(String(50), nullable=False)
-    pais_id: Mapped[int] = mapped_column(ForeignKey("pais.id"), nullable=False, index=True)
-
-    pais: Mapped["Pais"] = relationship(back_populates="regiones")
-    tipos_de_cafe: Mapped[list["TipoDeCafe"]] = relationship(back_populates="region")
-
-
-class Variedad(Base):
-    __tablename__ = "variedad"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    nombre: Mapped[str] = mapped_column(String(50), nullable=False)
-
-    tipos_de_cafe: Mapped[list["TipoDeCafe"]] = relationship(back_populates="variedad")
-
-
 class TipoDeCafe(Base):
     __tablename__ = "tipo_de_cafe"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     organico: Mapped[bool] = mapped_column(Boolean, nullable=False)
     precio_por_kg_verde: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    region_id: Mapped[int] = mapped_column(ForeignKey("region.id"), nullable=False, index=True)
-    variedad_id: Mapped[int] = mapped_column(ForeignKey("variedad.id"), nullable=False, index=True)
+    variedad: Mapped[str] = mapped_column(String(50), nullable=False)
+    region: Mapped[str] = mapped_column(String(50), nullable=False)
+    pais: Mapped[str] = mapped_column(String(50), nullable=False)
 
-    region: Mapped["Region"] = relationship(back_populates="tipos_de_cafe")
-    variedad: Mapped["Variedad"] = relationship(back_populates="tipos_de_cafe")
     lotes: Mapped[list["Lote"]] = relationship(back_populates="tipo_de_cafe")
     blends: Mapped[list["BlendHasTipoDeCafe"]] = relationship(back_populates="tipo_de_cafe")
 

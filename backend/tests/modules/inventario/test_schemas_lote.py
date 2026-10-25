@@ -148,6 +148,30 @@ def test_read_incluye_orden_tueste_id_pese_a_que_la_tabla_no_existe():
     assert "orden_tueste_id" in LoteRead.model_fields
 
 
+def test_read_se_construye_desde_el_orm_sin_adaptador():
+    """LoteRead coincide campo por campo con Lote: se valida el ORM directamente."""
+    lote = Lote(
+        id=3,
+        tipo=LoteTipo.VERDE,
+        estado=LoteEstado.ABIERTO,
+        fecha_vencimiento=datetime(2026, 12, 31, 8, 0),
+        humedad=Decimal("11.50"),
+        kg_disponibles=Decimal("60.00"),
+        kg_reales=Decimal("59.80"),
+        ubicacion_fisica="PASILLO-01",
+    )
+    leido = LoteRead.model_validate(lote)
+    assert leido.id == 3
+    assert leido.tipo == LoteTipo.VERDE
+    assert leido.observaciones is None
+    assert leido.orden_tueste_id is None
+
+
+def test_read_no_tiene_adaptador_propio():
+    """Regla de la capa de schemas: sin transformación, sin método desde_orm."""
+    assert not hasattr(LoteRead, "desde_orm")
+
+
 # ---------------------------------------------------------------------------
 # Ediciones puntuales (5.1, 5.2 y 5.3)
 # ---------------------------------------------------------------------------

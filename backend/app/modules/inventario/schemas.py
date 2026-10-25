@@ -18,7 +18,7 @@ from typing import Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.modules.inventario.models import LoteEstado, LoteTipo, TipoDeCafe
+from app.modules.inventario.models import Blend, LoteEstado, LoteTipo
 
 # ---------------------------------------------------------------------------
 # Precisión decimal: espejo exacto de las columnas Numeric(...) de models.py.
@@ -107,14 +107,16 @@ class TipoDeCafeUpdate(BaseModel):
 
 
 class TipoDeCafeRead(BaseModel):
-    """Lectura de tipo de café con los nombres de origen aplanados a texto.
+    """Lectura de tipo de café.
 
-    El identificador del tipo de café es su ``id``; ``variedad``, ``region``
-    y ``pais`` son atributos descriptivos, no claves. Por eso este schema no
-    expone ``variedad_id`` ni ``region_id``.
+    El identificador del tipo de café es su ``id``; ``variedad``, ``region`` y
+    ``pais`` son atributos de texto descriptivos, no claves, por lo que este
+    schema no expone ``variedad_id`` ni ``region_id``. El modelo y este schema
+    comparten exactamente los mismos campos, así que se construye desde el ORM
+    sin adaptador: ``TipoDeCafeRead.model_validate(tipo)``.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: int = Field(description="Identificador del tipo de café. Es su clave.")
     organico: bool = Field(description="Indica si el café se produce en condiciones orgánicas.")
@@ -122,23 +124,6 @@ class TipoDeCafeRead(BaseModel):
     variedad: str = Field(max_length=_LONGITUD_NOMBRE, description="Nombre de la variedad de café de origen.")
     region: str = Field(max_length=_LONGITUD_NOMBRE, description="Nombre de la región de origen.")
     pais: str = Field(max_length=_LONGITUD_NOMBRE, description="Nombre del país de origen.")
-
-    @classmethod
-    def desde_orm(cls, tipo: "TipoDeCafe") -> "TipoDeCafeRead":
-        """Aplana el objeto ORM al contrato de lectura.
-
-        Los tres nombres viven a dos y tres saltos de relación
-        (``tipo.variedad.nombre``, ``tipo.region.nombre``, ``tipo.region.pais.nombre``),
-        de modo que el ``crud`` debe hacer ``joinedload`` para no disparar N+1.
-        """
-        return cls(
-            id=tipo.id,
-            organico=tipo.organico,
-            precio_por_kg_verde=tipo.precio_por_kg_verde,
-            variedad=tipo.variedad.nombre,
-            region=tipo.region.nombre,
-            pais=tipo.region.pais.nombre,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +192,28 @@ class BlendRead(BaseModel):
     descripcion: str = Field(description="Descripción del blend.")
     tipos_de_cafe: list[BlendComposicionItem] = Field(description="Composición actual del blend.")
 
+    @classmethod
+    def desde_orm(cls, blend: "Blend") -> "BlendRead":
+        """Pasa el objeto ORM al contrato de lectura.
+
+        Único adaptador de la capa de schemas: ``blend.tipos_de_cafe`` son filas
+        de `BlendHasTipoDeCafe` con atributos de más, y este contrato solo debe
+        entregar el par ``tipo_de_cafe_id`` + ``porcentaje`` de cada una.
+        """
+        return cls(
+            id=blend.id,
+            nombre=blend.nombre,
+            precio_por_kg_verde=blend.precio_por_kg_verde,
+            descripcion=blend.descripcion,
+            tipos_de_cafe=[
+                BlendComposicionItem(
+                    tipo_de_cafe_id=fila.tipo_de_cafe_id,
+                    porcentaje=fila.porcentaje,
+                )
+                for fila in blend.tipos_de_cafe
+            ],
+        )
+
 
 # ---------------------------------------------------------------------------
 # Lote
@@ -264,9 +271,13 @@ class LoteUpdate(BaseModel):
 
 
 class LoteRead(BaseModel):
-    """Lectura de lote con todos sus atributos, nullable admitidos como ``None``."""
+    """Lectura de lote con todos sus atributos, nullable admitidos como ``None``.
 
-    model_config = ConfigDict(extra="forbid")
+    Los campos coinciden uno a uno con las columnas de ``Lote``, así que se
+    construye desde el ORM sin adaptador: ``LoteRead.model_validate(lote)``.
+    """
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: int = Field(description="Identificador del lote. Es su clave.")
     tipo: LoteTipo = Field(description="Naturaleza del lote, VERDE o TOSTADO.")
