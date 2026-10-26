@@ -22,14 +22,20 @@ PAYLOAD_BASE: dict[str, Any] = {
     "estado": "ABIERTO",
     "fecha_vencimiento": "2026-12-31T08:00:00",
     "humedad": "11.50",
-    "kg_disponibles": "60.00",
     "kg_reales": "59.80",
     "ubicacion_fisica": "PASILLO-01",
+    "tipo_de_cafe_id": 1,
 }
 
-OPCIONALES: tuple[str, ...] = ("observaciones", "tipo_de_cafe_id", "blend_id", "orden_tueste_id")
+# Nullable que puede venir en null sin romper la regla de origen único:
+# `tipo_de_cafe_id` es nullable en el modelo pero acá es el origen, así que no
+# puede ser null si `blend_id` tampoco viene.
+OPCIONALES: tuple[str, ...] = ("observaciones", "blend_id", "orden_tueste_id")
 
 PROHIBIDAS_EN_UPDATE: tuple[str, ...] = ("tipo", "tipo_de_cafe_id", "blend_id", "orden_tueste_id")
+
+# `LoteRead` sí expone `kg_disponibles`, que el alta ya no pide.
+PAYLOAD_LECTURA: dict[str, Any] = {**PAYLOAD_BASE, "kg_disponibles": "59.80"}
 
 
 # ---------------------------------------------------------------------------
@@ -40,30 +46,42 @@ def test_create_acepta_payload_minimo():
     assert creado.tipo == LoteTipo.VERDE
     assert creado.estado == LoteEstado.ABIERTO
     assert creado.fecha_vencimiento == datetime(2026, 12, 31, 8, 0)
-    assert creado.kg_disponibles == Decimal("60.00")
+    assert creado.kg_reales == Decimal("59.80")
 
 
-def test_create_sin_los_cuatro_atributos_nullable_es_valido():
+def test_create_no_solicita_kg_disponibles():
+    """Se deriva en el servicio: el contrato no lo pide."""
+    assert "kg_disponibles" not in LoteCreate.model_fields
+
+
+def test_create_rechaza_si_se_envia_kg_disponibles():
+    with pytest.raises(ValidationError):
+        LoteCreate(**PAYLOAD_BASE, kg_disponibles="60.00")
+
+
+def test_create_con_los_atributos_nullable_es_valido():
     creado = LoteCreate(**PAYLOAD_BASE)
     for campo in OPCIONALES:
         assert getattr(creado, campo) is None
 
 
-def test_create_con_los_cuatro_atributos_nullable_en_none_es_valido():
+def test_create_con_los_atributos_nullable_en_none_es_valido():
     creado = LoteCreate(**PAYLOAD_BASE, **{campo: None for campo in OPCIONALES})
     assert creado.observaciones is None
-    assert creado.tipo_de_cafe_id is None
     assert creado.blend_id is None
     assert creado.orden_tueste_id is None
+    assert creado.tipo_de_cafe_id == 1
 
 
 def test_create_acepta_los_cuatro_atributos_nullable_informados():
     creado = LoteCreate(
-        **PAYLOAD_BASE,
-        observaciones="Ingresó con humedad alta.",
-        tipo_de_cafe_id=4,
-        blend_id=None,
-        orden_tueste_id=None,
+        **{
+            **PAYLOAD_BASE,
+            "observaciones": "Ingresó con humedad alta.",
+            "tipo_de_cafe_id": 4,
+            "blend_id": None,
+            "orden_tueste_id": None,
+        }
     )
     assert creado.observaciones == "Ingresó con humedad alta."
     assert creado.tipo_de_cafe_id == 4
@@ -83,6 +101,80 @@ def test_create_rechaza_estado_fuera_del_enum():
 def test_create_rechaza_tipo_fuera_del_enum():
     with pytest.raises(ValidationError):
         LoteCreate(**{**PAYLOAD_BASE, "tipo": "MOLIDO"})
+
+
+# ---------------------------------------------------------------------------
+# Reglas del alta: humedad, kilos, origen y orden de tueste (1.1, 1.2, 1.4, 1.5)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("humedad", ["100.00", "0"])
+def test_create_acepta_humedad_en_los_limites(humedad: str):
+    assert LoteCreate(**{**PAYLOAD_BASE, "humedad": humedad}).humedad == Decimal(humedad)
+
+
+@pytest.mark.parametrize("humedad", ["100.01", "-0.01", "101"])
+def test_create_rechaza_humedad_fuera_de_rango(humedad: str):
+    with pytest.raises(ValidationError):
+        LoteCreate(**{**PAYLOAD_BASE, "humedad": humedad})
+
+
+def test_create_acepta_kg_reales_en_cero():
+    """Cota `>= 0`: un lote puede nacer sin kilos."""
+    assert LoteCreate(**{**PAYLOAD_BASE, "kg_reales": "0"}).kg_reales == Decimal("0")
+
+
+def test_create_rechaza_kg_reales_negativo():
+    with pytest.raises(ValidationError):
+        LoteCreate(**{**PAYLOAD_BASE, "kg_reales": "-1"})
+
+
+def test_update_acepta_kg_reales_en_cero():
+    assert LoteUpdate(kg_reales="0").kg_reales == Decimal("0")
+
+
+def test_update_rechaza_kg_reales_negativo():
+    with pytest.raises(ValidationError):
+        LoteUpdate(kg_reales="-1")
+
+
+def test_kg_reales_puntual_acepta_cero_y_rechaza_negativo():
+    assert LoteKgRealesUpdate(kg_reales="0").kg_reales == Decimal("0")
+    with pytest.raises(ValidationError):
+        LoteKgRealesUpdate(kg_reales="-1")
+
+
+def test_create_rechaza_sin_origen():
+    with pytest.raises(ValidationError):
+        LoteCreate(**{**PAYLOAD_BASE, "tipo_de_cafe_id": None})
+
+
+def test_create_rechaza_con_ambos_origenes():
+    with pytest.raises(ValidationError):
+        LoteCreate(**{**PAYLOAD_BASE, "blend_id": 2})
+
+
+def test_create_acepta_origen_de_blend():
+    creado = LoteCreate(**{**PAYLOAD_BASE, "tipo_de_cafe_id": None, "blend_id": 2})
+    assert creado.blend_id == 2
+    assert creado.tipo_de_cafe_id is None
+
+
+def test_create_verde_rechaza_orden_de_tueste():
+    with pytest.raises(ValidationError):
+        LoteCreate(**{**PAYLOAD_BASE, "orden_tueste_id": 5})
+
+
+def test_create_verde_sin_orden_de_tueste_es_valido():
+    assert LoteCreate(**PAYLOAD_BASE).orden_tueste_id is None
+
+
+def test_create_tostado_exige_orden_de_tueste():
+    with pytest.raises(ValidationError):
+        LoteCreate(**{**PAYLOAD_BASE, "tipo": "TOSTADO"})
+
+
+def test_create_tostado_con_orden_de_tueste_es_valido():
+    creado = LoteCreate(**{**PAYLOAD_BASE, "tipo": "TOSTADO", "orden_tueste_id": 5})
+    assert creado.orden_tueste_id == 5
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +215,7 @@ def test_update_rechaza_estados_fuera_del_enum():
 # Lectura (4.4 y 4.5)
 # ---------------------------------------------------------------------------
 def test_read_serializa_con_los_cuatro_nullable_en_none():
-    leido = LoteRead(id=3, **PAYLOAD_BASE)
+    leido = LoteRead(id=3, **PAYLOAD_LECTURA)
     dump = leido.model_dump()
     assert dump["id"] == 3
     assert dump["tipo"] == LoteTipo.VERDE
@@ -134,13 +226,16 @@ def test_read_serializa_con_los_cuatro_nullable_en_none():
 def test_read_con_atributos_nullable_informados():
     leido = LoteRead(
         id=3,
-        **PAYLOAD_BASE,
-        observaciones="Revisado.",
-        tipo_de_cafe_id=4,
-        blend_id=5,
-        orden_tueste_id=8,
+        **{
+            **PAYLOAD_LECTURA,
+            "observaciones": "Revisado.",
+            "tipo_de_cafe_id": 4,
+            "blend_id": 5,
+            "orden_tueste_id": 8,
+        },
     )
     assert leido.orden_tueste_id == 8
+    assert leido.kg_disponibles == Decimal("59.80")
 
 
 def test_read_incluye_orden_tueste_id_pese_a_que_la_tabla_no_existe():
@@ -239,7 +334,8 @@ def test_puntuales_describen_su_campo():
 @pytest.mark.parametrize("columna", ["humedad", "kg_disponibles", "kg_reales"])
 def test_precision_coincide_con_la_columna_del_modelo(columna: str):
     tipo_columna = Lote.__table__.c[columna].type
-    campo = LoteCreate.model_fields[columna]
+    # Se lee de LoteRead porque `kg_disponibles` ya no forma parte de LoteCreate.
+    campo = LoteRead.model_fields[columna]
     precision_schema = next(meta for meta in campo.metadata if hasattr(meta, "max_digits"))
     assert (precision_schema.max_digits, precision_schema.decimal_places) == (
         tipo_columna.precision,

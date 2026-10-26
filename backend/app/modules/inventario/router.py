@@ -20,6 +20,9 @@ from app.modules.inventario.schemas import (
     BlendCreate,
     BlendRead,
     BlendUpdate,
+    LoteCreate,
+    LoteRead,
+    LoteUpdate,
     TipoDeCafeCreate,
     TipoDeCafeRead,
     TipoDeCafeUpdate,
@@ -29,6 +32,7 @@ router = APIRouter(tags=["Inventario"])
 
 RUTA_TIPOS_DE_CAFE = "/tipos-de-cafe"
 RUTA_BLENDS = "/blends"
+RUTA_LOTES = "/lotes"
 
 
 def _a_codigo_http(exc: Exception) -> NoReturn:
@@ -47,6 +51,10 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     elif isinstance(exc, services.NombreDeBlendEnUso):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    elif isinstance(exc, services.LoteNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.OrigenDeLoteNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     raise exc
 
 
@@ -140,6 +148,55 @@ def eliminar_blend(blend_id: int, db: Session = Depends(get_db)) -> Response:
     try:
         services.eliminar_blend(db, blend_id)
     except (services.BlendNoEncontrado, services.BlendReferenciado) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Lote
+# ---------------------------------------------------------------------------
+@router.post(RUTA_LOTES, response_model=LoteRead, status_code=status.HTTP_201_CREATED)
+def crear_lote(datos: LoteCreate, db: Session = Depends(get_db)) -> LoteRead:
+    """Da de alta un lote. Los kilos disponibles se derivan de los reales."""
+    try:
+        return services.crear_lote(db, datos)
+    except services.OrigenDeLoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.get(f"{RUTA_LOTES}/{{lote_id}}", response_model=LoteRead)
+def leer_lote(lote_id: int, db: Session = Depends(get_db)) -> LoteRead:
+    """Devuelve el lote con el `id` indicado, con sus claves foráneas."""
+    try:
+        return services.obtener_lote(db, lote_id)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}", response_model=LoteRead)
+def editar_lote(
+    lote_id: int,
+    datos: LoteUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Modifica solo los atributos enviados con valor."""
+    try:
+        return services.actualizar_lote(db, lote_id, datos)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.delete(
+    f"{RUTA_LOTES}/{{lote_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def eliminar_lote(lote_id: int, db: Session = Depends(get_db)) -> Response:
+    """Borra únicamente el lote; lo que referencie permanece intacto."""
+    try:
+        services.eliminar_lote(db, lote_id)
+    except services.LoteNoEncontrado as exc:
         _a_codigo_http(exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

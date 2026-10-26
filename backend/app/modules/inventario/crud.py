@@ -4,6 +4,7 @@ Consultas puras: sin reglas de negocio y sin commits. Tanto la decisión de qué
 operaciones proceden como la frontera transaccional viven en ``services.py``.
 """
 
+from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import func, select
@@ -18,6 +19,7 @@ from app.modules.inventario.models import (
 from app.modules.inventario.schemas import (
     BlendComposicionItem,
     BlendCreate,
+    LoteCreate,
     TipoDeCafeCreate,
 )
 
@@ -189,4 +191,66 @@ def _escribir_composicion(db: Session, blend: Blend, items: list[BlendComposicio
                 porcentaje=item.porcentaje,
             )
         )
+    db.flush()
+
+
+# ---------------------------------------------------------------------------
+# Lote
+# ---------------------------------------------------------------------------
+def obtener_lote(db: Session, lote_id: int) -> Lote | None:
+    """Devuelve el lote con ese ``id``, o ``None`` si no existe."""
+    return db.get(Lote, lote_id)
+
+
+def existe_registro(db: Session, entidad: type, entidad_id: int) -> bool:
+    """Consulta si existe una fila con esa clave primaria en la tabla dada.
+
+    Genérico a propósito: sirve para el origen del lote hoy y para la tabla de
+    `orden_tueste` el día que exista.
+    """
+    return db.get(entidad, entidad_id) is not None
+
+
+def crear_lote(db: Session, datos: LoteCreate, kg_disponibles: Decimal) -> Lote:
+    """Da de alta un lote.
+
+    ``kg_disponibles`` llega calculado por quien llama: este módulo no decide
+    de dónde sale ese número, solo lo persiste.
+    """
+    lote = Lote(
+        tipo=datos.tipo,
+        estado=datos.estado,
+        fecha_vencimiento=datos.fecha_vencimiento,
+        humedad=datos.humedad,
+        kg_reales=datos.kg_reales,
+        kg_disponibles=kg_disponibles,
+        ubicacion_fisica=datos.ubicacion_fisica,
+        observaciones=datos.observaciones,
+        tipo_de_cafe_id=datos.tipo_de_cafe_id,
+        blend_id=datos.blend_id,
+        orden_tueste_id=datos.orden_tueste_id,
+    )
+    db.add(lote)
+    db.flush()
+    return lote
+
+
+def actualizar_lote(db: Session, lote: Lote, cambios: dict[str, Any]) -> Lote:
+    """Aplica solo las claves recibidas, sin commit.
+
+    No puede incluir ``tipo`` ni las tres claves foráneas: `LoteUpdate` no las
+    declara, así que `extra="forbid"` ya las rechaza antes de llegar acá.
+    """
+    for atributo, valor in cambios.items():
+        setattr(lote, atributo, valor)
+    db.flush()
+    return lote
+
+
+def eliminar_lote(db: Session, lote: Lote) -> None:
+    """Marca el lote para borrado. No hace commit.
+
+    No toca `tipo_de_cafe`, `blend` ni `orden_tueste`: son tablas padre, no hijos.
+    """
+    db.delete(lote)
     db.flush()

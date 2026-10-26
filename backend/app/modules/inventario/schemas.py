@@ -27,7 +27,7 @@ from app.modules.inventario.models import Blend, LoteEstado, LoteTipo
 # ---------------------------------------------------------------------------
 PrecioPorKgVerde = Annotated[Decimal, Field(max_digits=10, decimal_places=2, gt=0)]
 Kilos = Annotated[Decimal, Field(max_digits=10, decimal_places=2, ge=0)]
-HumedadPorcentaje = Annotated[Decimal, Field(max_digits=5, decimal_places=2, ge=0)]
+HumedadPorcentaje = Annotated[Decimal, Field(max_digits=5, decimal_places=2, ge=0, le=100)]
 PorcentajeBlend = Annotated[Decimal, Field(max_digits=5, decimal_places=2, gt=0)]
 
 # Cantidad de caracteres de String(...) en models.py.
@@ -232,15 +232,19 @@ class BlendRead(BaseModel):
 # Lote
 # ---------------------------------------------------------------------------
 class LoteCreate(BaseModel):
-    """Alta de lote. Los cuatro atributos nullable del modelo no son obligatorios."""
+    """Alta de lote.
+
+    Los cuatro atributos nullable del modelo no son obligatorios, y
+    ``kg_disponibles`` no se solicita: lo deriva el servicio a partir de
+    ``kg_reales`` para que no haya dos fuentes de verdad del mismo número.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     tipo: LoteTipo = Field(description="Naturaleza del lote, VERDE o TOSTADO.")
     estado: LoteEstado = Field(description="Estado del lote, CERRADO o ABIERTO.")
     fecha_vencimiento: datetime = Field(description="Fecha y hora de vencimiento del lote.")
-    humedad: HumedadPorcentaje = Field(description="Humedad medida del café, en porcentaje.")
-    kg_disponibles: Kilos = Field(description="Kilos disponibles para despacho.")
+    humedad: HumedadPorcentaje = Field(description="Humedad medida del café, en porcentaje, de 0 a 100.")
     kg_reales: Kilos = Field(description="Kilos reales pesados del lote.")
     ubicacion_fisica: str = Field(
         min_length=1,
@@ -255,6 +259,24 @@ class LoteCreate(BaseModel):
     orden_tueste_id: Optional[int] = Field(
         default=None, description="Identificador de la orden de tueste asociada, si corresponde."
     )
+
+    @model_validator(mode="after")
+    def _origen_unico(self) -> "LoteCreate":
+        """El lote nace de un tipo de café o de un blend, nunca de los dos."""
+        if self.tipo_de_cafe_id is None and self.blend_id is None:
+            raise ValueError("El lote debe indicar un origen: tipo_de_cafe_id o blend_id.")
+        elif self.tipo_de_cafe_id is not None and self.blend_id is not None:
+            raise ValueError("El lote no puede indicar tipo_de_cafe_id y blend_id a la vez.")
+        return self
+
+    @model_validator(mode="after")
+    def _orden_tueste_según_el_tipo(self) -> "LoteCreate":
+        """VERDE no tiene orden de tueste; TOSTADO sí, obligatoriamente."""
+        if self.tipo == LoteTipo.VERDE and self.orden_tueste_id is not None:
+            raise ValueError("Un lote VERDE no puede llevar orden de tueste asociada.")
+        elif self.tipo == LoteTipo.TOSTADO and self.orden_tueste_id is None:
+            raise ValueError("Un lote TOSTADO debe indicar su orden de tueste.")
+        return self
 
 
 class LoteUpdate(BaseModel):

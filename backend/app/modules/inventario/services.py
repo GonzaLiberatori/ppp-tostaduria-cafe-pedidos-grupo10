@@ -11,11 +11,14 @@ repite.
 from sqlalchemy.orm import Session
 
 from app.modules.inventario import crud
-from app.modules.inventario.models import Blend, TipoDeCafe
+from app.modules.inventario.models import Blend, Lote, TipoDeCafe
 from app.modules.inventario.schemas import (
     BlendCreate,
     BlendRead,
     BlendUpdate,
+    LoteCreate,
+    LoteRead,
+    LoteUpdate,
     TipoDeCafeCreate,
     TipoDeCafeRead,
     TipoDeCafeUpdate,
@@ -62,6 +65,23 @@ class NombreDeBlendEnUso(Exception):
     def __init__(self, nombre: str) -> None:
         self.nombre = nombre
         super().__init__(f"Ya existe un blend con el nombre '{nombre}'.")
+
+
+class LoteNoEncontrado(Exception):
+    """El ``id`` recibido no corresponde a ningún lote."""
+
+    def __init__(self, lote_id: int) -> None:
+        self.lote_id = lote_id
+        super().__init__(f"No existe un lote con id {lote_id}.")
+
+
+class OrigenDeLoteNoEncontrado(Exception):
+    """El origen indicado no corresponde a ningún registro."""
+
+    def __init__(self, entidad: str, entidad_id: int) -> None:
+        self.entidad = entidad
+        self.entidad_id = entidad_id
+        super().__init__(f"No existe {entidad} con id {entidad_id}.")
 
 
 def crear_tipo_de_cafe(db: Session, datos: TipoDeCafeCreate) -> TipoDeCafeRead:
@@ -221,6 +241,86 @@ def eliminar_blend(db: Session, blend_id: int) -> None:
     try:
         crud.eliminar_composicion(db, blend)
         crud.eliminar_blend(db, blend)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Lote
+# ---------------------------------------------------------------------------
+def crear_lote(db: Session, datos: LoteCreate) -> LoteRead:
+    """Da de alta un lote en una sola transacción.
+
+    El schema ya garantizó que viene exactamente un origen; acá solo falta
+    comprobar que ese registro exista. Y de paso se deriva el campo que el
+    contrato no pide: `kg_disponibles` arranca igual que `kg_reales`.
+    """
+    if datos.tipo_de_cafe_id is not None:
+        entidad_origen, origen_id = TipoDeCafe, datos.tipo_de_cafe_id
+    else:
+        entidad_origen, origen_id = Blend, datos.blend_id
+
+    if not crud.existe_registro(db, entidad_origen, origen_id):
+        raise OrigenDeLoteNoEncontrado(entidad_origen.__name__, origen_id)
+
+    try:
+        lote = crud.crear_lote(db, datos, kg_disponibles=datos.kg_reales)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return LoteRead.model_validate(lote)
+
+
+def obtener_lote(db: Session, lote_id: int) -> LoteRead:
+    """Lee un lote por su ``id``, con las claves foráneas sin resolver."""
+    lote = crud.obtener_lote(db, lote_id)
+
+    if lote is None:
+        raise LoteNoEncontrado(lote_id)
+
+    return LoteRead.model_validate(lote)
+
+
+def actualizar_lote(db: Session, lote_id: int, datos: LoteUpdate) -> LoteRead:
+    """Aplica los atributos con valor.
+
+    La existencia se comprueba ANTES de aplicar cambios: con un cuerpo vacío
+    sobre un ``id`` inexistente, el orden inverso devolvería un registro
+    inexistente en lugar de ``LoteNoEncontrado``.
+    """
+    lote = crud.obtener_lote(db, lote_id)
+
+    if lote is None:
+        raise LoteNoEncontrado(lote_id)
+
+    cambios = datos.model_dump(exclude_none=True)
+
+    if not cambios:
+        return LoteRead.model_validate(lote)
+
+    try:
+        crud.actualizar_lote(db, lote, cambios)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return LoteRead.model_validate(lote)
+
+
+def eliminar_lote(db: Session, lote_id: int) -> None:
+    """Borra un lote. Nadie lo referencia, así que no hay bloqueos."""
+    lote = crud.obtener_lote(db, lote_id)
+
+    if lote is None:
+        raise LoteNoEncontrado(lote_id)
+
+    try:
+        crud.eliminar_lote(db, lote)
         db.commit()
     except Exception:
         db.rollback()
