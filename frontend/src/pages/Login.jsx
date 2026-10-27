@@ -21,7 +21,11 @@ export default function Login() {
     
     const result = login(username, password)
     if (result.success) {
-      navigate('/')
+      if (result.user.role === 'cliente') {
+        navigate('/cliente')
+      } else {
+        navigate('/')
+      }
     } else {
       setError(result.error)
     }

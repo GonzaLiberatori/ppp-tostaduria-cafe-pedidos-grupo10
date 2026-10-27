@@ -69,7 +69,7 @@ function AppRoutes() {
       
       <Route element={<Layout />}>
         <Route path="/" element={
-          <ProtectedRoute>
+          <ProtectedRoute allowedRoles={['admin', 'empleado', 'vendedor']}>
             <Dashboard />
           </ProtectedRoute>
         } />
@@ -96,27 +96,27 @@ function AppRoutes() {
       </Route>
       
       <Route element={<LayoutCliente />}>
-        <Route path="cliente" element={
+        <Route path="/cliente" element={
           <ProtectedRoute allowedRoles={['cliente']}>
             <InicioCliente />
           </ProtectedRoute>
         } />
-        <Route path="cliente/comprar" element={
+        <Route path="/cliente/comprar" element={
           <ProtectedRoute allowedRoles={['cliente']}>
             <ComprarCliente />
           </ProtectedRoute>
         } />
-        <Route path="cliente/mis-pedidos" element={
+        <Route path="/cliente/mis-pedidos" element={
           <ProtectedRoute allowedRoles={['cliente']}>
             <MisPedidosCliente />
           </ProtectedRoute>
         } />
-        <Route path="cliente/perfil" element={
+        <Route path="/cliente/perfil" element={
           <ProtectedRoute allowedRoles={['cliente']}>
             <PerfilCliente />
           </ProtectedRoute>
         } />
-        <Route path="cliente/suscripciones" element={
+        <Route path="/cliente/suscripciones" element={
           <ProtectedRoute allowedRoles={['cliente']}>
             <SuscripcionesCliente />
           </ProtectedRoute>
