@@ -21,6 +21,9 @@ from app.modules.inventario.schemas import (
     BlendRead,
     BlendUpdate,
     LoteCreate,
+    LoteEstadoUpdate,
+    LoteKgDisponiblesUpdate,
+    LoteKgRealesUpdate,
     LoteRead,
     LoteUpdate,
     TipoDeCafeCreate,
@@ -55,6 +58,8 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     elif isinstance(exc, services.OrigenDeLoteNoEncontrado):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.KgDisponiblesExcedeKgReales):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     raise exc
 
 
@@ -200,3 +205,48 @@ def eliminar_lote(lote_id: int, db: Session = Depends(get_db)) -> Response:
         _a_codigo_http(exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}/kg-reales", response_model=LoteRead)
+def actualizar_kg_reales(
+    lote_id: int,
+    datos: LoteKgRealesUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Actualiza los kilos reales de un lote.
+
+    Propaga la diferencia a kg_disponibles si el nuevo valor es mayor.
+    """
+    try:
+        return services.actualizar_kg_reales(db, lote_id, datos)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}/kg-disponibles", response_model=LoteRead)
+def actualizar_kg_disponibles(
+    lote_id: int,
+    datos: LoteKgDisponiblesUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Actualiza los kilos disponibles de un lote.
+
+    Valida que kg_disponibles no exceda kg_reales.
+    """
+    try:
+        return services.actualizar_kg_disponibles(db, lote_id, datos)
+    except (services.LoteNoEncontrado, services.KgDisponiblesExcedeKgReales) as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}/estado", response_model=LoteRead)
+def actualizar_estado(
+    lote_id: int,
+    datos: LoteEstadoUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Actualiza el estado de un lote."""
+    try:
+        return services.actualizar_estado(db, lote_id, datos)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)

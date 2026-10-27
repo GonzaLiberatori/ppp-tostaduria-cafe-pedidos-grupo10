@@ -10,10 +10,13 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from decimal import Decimal
+
 from app.modules.inventario.models import (
     Blend,
     BlendHasTipoDeCafe,
     Lote,
+    LoteEstado,
     TipoDeCafe,
 )
 from app.modules.inventario.schemas import (
@@ -254,3 +257,26 @@ def eliminar_lote(db: Session, lote: Lote) -> None:
     """
     db.delete(lote)
     db.flush()
+
+
+def actualizar_kg_reales(db: Session, lote: Lote, kg_reales: Decimal) -> Lote:
+    """Actualiza los kilos reales de un lote. No hace commit."""
+    lote.kg_reales = kg_reales
+    db.flush()
+    return lote
+
+
+def actualizar_kg_disponibles(
+    db: Session, lote: Lote, kg_disponibles: Decimal
+) -> Lote:
+    """Actualiza los kilos disponibles de un lote. No hace commit."""
+    lote.kg_disponibles = kg_disponibles
+    db.flush()
+    return lote
+
+
+def actualizar_estado(db: Session, lote: Lote, estado: LoteEstado) -> Lote:
+    """Actualiza el estado de un lote. No hace commit."""
+    lote.estado = estado
+    db.flush()
+    return lote

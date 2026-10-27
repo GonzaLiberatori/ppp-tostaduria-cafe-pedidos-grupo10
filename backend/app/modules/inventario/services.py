@@ -8,6 +8,8 @@ desconocidos) las hace Pydantic antes de llegar acá, así que este módulo no l
 repite.
 """
 
+from decimal import Decimal
+
 from sqlalchemy.orm import Session
 
 from app.modules.inventario import crud
@@ -17,6 +19,9 @@ from app.modules.inventario.schemas import (
     BlendRead,
     BlendUpdate,
     LoteCreate,
+    LoteEstadoUpdate,
+    LoteKgDisponiblesUpdate,
+    LoteKgRealesUpdate,
     LoteRead,
     LoteUpdate,
     TipoDeCafeCreate,
@@ -82,6 +87,17 @@ class OrigenDeLoteNoEncontrado(Exception):
         self.entidad = entidad
         self.entidad_id = entidad_id
         super().__init__(f"No existe {entidad} con id {entidad_id}.")
+
+
+class KgDisponiblesExcedeKgReales(Exception):
+    """Los kg disponibles no pueden superar los kg reales del lote."""
+
+    def __init__(self, kg_disponibles: Decimal, kg_reales: Decimal) -> None:
+        self.kg_disponibles = kg_disponibles
+        self.kg_reales = kg_reales
+        super().__init__(
+            f"Los kg disponibles ({kg_disponibles}) no pueden superar los kg reales ({kg_reales})."
+        )
 
 
 def crear_tipo_de_cafe(db: Session, datos: TipoDeCafeCreate) -> TipoDeCafeRead:
@@ -325,3 +341,74 @@ def eliminar_lote(db: Session, lote_id: int) -> None:
     except Exception:
         db.rollback()
         raise
+
+
+# ---------------------------------------------------------------------------
+# Actualizaciones puntuales de Lote
+# ---------------------------------------------------------------------------
+def actualizar_kg_reales(db: Session, lote_id: int, datos: LoteKgRealesUpdate) -> LoteRead:
+    """Actualiza los kilos reales de un lote.
+
+    Si el nuevo valor es mayor al actual, propaga la diferencia a `kg_disponibles`.
+    Si es menor o igual, no toca `kg_disponibles`.
+    """
+    lote = crud.obtener_lote(db, lote_id)
+
+    if lote is None:
+        raise LoteNoEncontrado(lote_id)
+
+    try:
+        diferencia = datos.kg_reales - lote.kg_reales
+
+        if diferencia > 0:
+            crud.actualizar_kg_disponibles(db, lote, lote.kg_disponibles + diferencia)
+
+        crud.actualizar_kg_reales(db, lote, datos.kg_reales)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return LoteRead.model_validate(lote)
+
+
+def actualizar_kg_disponibles(
+    db: Session, lote_id: int, datos: LoteKgDisponiblesUpdate
+) -> LoteRead:
+    """Actualiza los kilos disponibles de un lote.
+
+    Valida que `kg_disponibles` no exceda `kg_reales` del lote.
+    """
+    lote = crud.obtener_lote(db, lote_id)
+
+    if lote is None:
+        raise LoteNoEncontrado(lote_id)
+
+    if datos.kg_disponibles > lote.kg_reales:
+        raise KgDisponiblesExcedeKgReales(datos.kg_disponibles, lote.kg_reales)
+
+    try:
+        crud.actualizar_kg_disponibles(db, lote, datos.kg_disponibles)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return LoteRead.model_validate(lote)
+
+
+def actualizar_estado(db: Session, lote_id: int, datos: LoteEstadoUpdate) -> LoteRead:
+    """Actualiza el estado de un lote."""
+    lote = crud.obtener_lote(db, lote_id)
+
+    if lote is None:
+        raise LoteNoEncontrado(lote_id)
+
+    try:
+        crud.actualizar_estado(db, lote, datos.estado)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return LoteRead.model_validate(lote)
