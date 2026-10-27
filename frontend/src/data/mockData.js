@@ -235,6 +235,18 @@ export const mockClientes = [
     direccion: 'Belgrano, CABA',
     creadoEn: '2026-02-01T10:00:00Z',
   },
+  {
+    id: 'cliente-1',
+    nombre: 'Cliente',
+    tipo: 'B2C',
+    kilosComprados: 0,
+    tieneDeuda: false,
+    montoDeuda: 0,
+    telefono: '+54 9 11 0000-0000',
+    email: 'cliente@cafedefinca.com.ar',
+    direccion: 'Sin especificar',
+    creadoEn: new Date().toISOString(),
+  },
 ]
 
 export const mockPedidos = [

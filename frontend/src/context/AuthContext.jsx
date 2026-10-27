@@ -7,6 +7,7 @@ const MOCK_USERS = [
   { username: 'admin', password: '111', role: 'admin', nombre: 'Administrador' },
   { username: 'empleado', password: '111', role: 'empleado', nombre: 'Empleado' },
   { username: 'vendedor', password: '111', role: 'vendedor', nombre: 'Vendedor' },
+  { username: 'Cliente', password: '111', role: 'cliente', nombre: 'Cliente', clienteId: 'cliente-1' },
 ]
 
 const STORAGE_KEY = 'cafe-finca-auth'
