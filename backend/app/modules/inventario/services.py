@@ -412,3 +412,41 @@ def actualizar_estado(db: Session, lote_id: int, datos: LoteEstadoUpdate) -> Lot
         raise
 
     return LoteRead.model_validate(lote)
+
+
+# ---------------------------------------------------------------------------
+# Listados
+# ---------------------------------------------------------------------------
+def listar_tipos_de_cafe(db: Session) -> list[TipoDeCafeRead]:
+    """Lista todos los tipos de café registrados."""
+    tipos = crud.listar_tipos_de_cafe(db)
+    return [TipoDeCafeRead.model_validate(tipo) for tipo in tipos]
+
+
+def listar_blends(db: Session) -> list[BlendRead]:
+    """Lista todos los blends registrados con sus composiciones."""
+    blends = crud.listar_blends(db)
+    return [BlendRead.desde_orm(blend) for blend in blends]
+
+
+class FiltroLotesInvalido(Exception):
+    """El filtrado de lotes requiere exactamente uno de los dos parámetros."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Debe proporcionar exactamente uno de tipo_de_cafe_id o blend_id, no ambos ni ninguno."
+        )
+
+
+def listar_lotes(
+    db: Session,
+    tipo_de_cafe_id: int | None = None,
+    blend_id: int | None = None,
+) -> list[LoteRead]:
+    """Lista los lotes filtrados por tipo_de_cafe_id o blend_id (XOR)."""
+    # Validación XOR: exactamente uno debe tener valor
+    if (tipo_de_cafe_id is None) == (blend_id is None):
+        raise FiltroLotesInvalido()
+
+    lotes = crud.listar_lotes(db, tipo_de_cafe_id=tipo_de_cafe_id, blend_id=blend_id)
+    return [LoteRead.model_validate(lote) for lote in lotes]

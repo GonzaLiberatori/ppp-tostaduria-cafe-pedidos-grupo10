@@ -275,6 +275,36 @@ def actualizar_kg_disponibles(
     return lote
 
 
+def listar_blends(db: Session) -> list[Blend]:
+    """Devuelve todos los blends registrados, ordenados por `id`, con su composición cargada."""
+    return db.execute(select(Blend).order_by(Blend.id)).scalars().all()
+
+
+def listar_lotes(
+    db: Session,
+    tipo_de_cafe_id: Optional[int] = None,
+    blend_id: Optional[int] = None,
+) -> list[Lote]:
+    """Devuelve los lotes filtrados por tipo_de_cafe_id o blend_id, ordenados por `id`.
+    
+    Si ambos parámetros son None, devuelve todos los lotes.
+    No valida que el ID corresponda a un registro existente.
+    """
+    query = select(Lote)
+    
+    if tipo_de_cafe_id is not None:
+        query = query.where(Lote.tipo_de_cafe_id == tipo_de_cafe_id)
+    elif blend_id is not None:
+        query = query.where(Lote.blend_id == blend_id)
+    
+    return db.execute(query.order_by(Lote.id)).scalars().all()
+
+
+def listar_tipos_de_cafe(db: Session) -> list[TipoDeCafe]:
+    """Devuelve todos los tipos de café registrados, ordenados por `id`."""
+    return db.execute(select(TipoDeCafe).order_by(TipoDeCafe.id)).scalars().all()
+
+
 def actualizar_estado(db: Session, lote: Lote, estado: LoteEstado) -> Lote:
     """Actualiza el estado de un lote. No hace commit."""
     lote.estado = estado

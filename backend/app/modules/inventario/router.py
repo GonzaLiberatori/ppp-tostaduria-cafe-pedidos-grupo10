@@ -9,7 +9,7 @@ módulo, con los prefijos escritos en cada ruta, para que quien lo incluya no
 tenga que acordarse de dos routers.
 """
 
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
@@ -60,6 +60,8 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     elif isinstance(exc, services.KgDisponiblesExcedeKgReales):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    elif isinstance(exc, services.FiltroLotesInvalido):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     raise exc
 
 
@@ -70,6 +72,12 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
 def crear_tipo_de_cafe(datos: TipoDeCafeCreate, db: Session = Depends(get_db)) -> TipoDeCafeRead:
     """Da de alta un tipo de café."""
     return services.crear_tipo_de_cafe(db, datos)
+
+
+@router.get(RUTA_TIPOS_DE_CAFE, response_model=list[TipoDeCafeRead])
+def listar_tipos_de_cafe(db: Session = Depends(get_db)) -> list[TipoDeCafeRead]:
+    """Lista todos los tipos de café registrados."""
+    return services.listar_tipos_de_cafe(db)
 
 
 @router.get(f"{RUTA_TIPOS_DE_CAFE}/{{tipo_id}}", response_model=TipoDeCafeRead)
@@ -121,6 +129,12 @@ def crear_blend(datos: BlendCreate, db: Session = Depends(get_db)) -> BlendRead:
         _a_codigo_http(exc)
 
 
+@router.get(RUTA_BLENDS, response_model=list[BlendRead])
+def listar_blends(db: Session = Depends(get_db)) -> list[BlendRead]:
+    """Lista todos los blends registrados con sus composiciones."""
+    return services.listar_blends(db)
+
+
 @router.get(f"{RUTA_BLENDS}/{{blend_id}}", response_model=BlendRead)
 def leer_blend(blend_id: int, db: Session = Depends(get_db)) -> BlendRead:
     """Devuelve el blend con el ``id`` indicado y su composición."""
@@ -167,6 +181,21 @@ def crear_lote(datos: LoteCreate, db: Session = Depends(get_db)) -> LoteRead:
     try:
         return services.crear_lote(db, datos)
     except services.OrigenDeLoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.get(RUTA_LOTES, response_model=list[LoteRead])
+def listar_lotes(
+    tipo_de_cafe_id: Optional[int] = None,
+    blend_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+) -> list[LoteRead]:
+    """Lista los lotes filtrados por tipo_de_cafe_id o blend_id (XOR)."""
+    try:
+        return services.listar_lotes(
+            db, tipo_de_cafe_id=tipo_de_cafe_id, blend_id=blend_id
+        )
+    except services.FiltroLotesInvalido as exc:
         _a_codigo_http(exc)
 
 
