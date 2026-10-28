@@ -152,7 +152,7 @@ export default function Suscripciones() {
         </div>
       </div>
 
-      <div className="card p-6 max-w-2xl">
+      <div className="card p-6 max-w-2xl mx-auto">
         <h2 className="font-semibold text-[var(--color-text-primary)] mb-6">Nueva suscripción</h2>
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
