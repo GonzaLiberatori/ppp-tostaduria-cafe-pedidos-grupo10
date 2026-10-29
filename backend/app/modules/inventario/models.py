@@ -1,57 +1,94 @@
+import enum
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
 
-class Stock(Base):
-    __tablename__ = "stock"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    tipo: Mapped[str] = mapped_column(String(20), nullable=False)  # verde, tostado
-    variedad: Mapped[str] = mapped_column(String(100), nullable=False)
-    origen: Mapped[str] = mapped_column(String(100), nullable=False)
-    precio_kg: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    lote_principal: Mapped[str] = mapped_column(String(50), nullable=False)
-    fecha_ingreso: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    # Relationships
-    bolsas: Mapped[list["Bolsa"]] = relationship(
-        "Bolsa",
-        back_populates="stock",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-    )
-
-    def __repr__(self) -> str:
-        return f"<Stock(id={self.id}, variedad={self.variedad}, tipo={self.tipo})>"
+class LoteTipo(str, enum.Enum):
+    VERDE = "VERDE"
+    TOSTADO = "TOSTADO"
 
 
-class Bolsa(Base):
-    __tablename__ = "bolsas"
+class LoteEstado(str, enum.Enum):
+    CERRADO = "CERRADO"
+    ABIERTO = "ABIERTO"
 
-    id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    stock_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("stock.id", ondelete="CASCADE"),
+
+class TipoDeCafe(Base):
+    __tablename__ = "tipo_de_cafe"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    organico: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    precio_por_kg_verde: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    variedad: Mapped[str] = mapped_column(String(50), nullable=False)
+    region: Mapped[str] = mapped_column(String(50), nullable=False)
+    pais: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    lotes: Mapped[list["Lote"]] = relationship(back_populates="tipo_de_cafe")
+    blends: Mapped[list["BlendHasTipoDeCafe"]] = relationship(back_populates="tipo_de_cafe")
+
+
+class Blend(Base):
+    __tablename__ = "blend"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nombre: Mapped[str] = mapped_column(String(50), nullable=False)
+    precio_por_kg_verde: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    descripcion: Mapped[str] = mapped_column(Text, nullable=False)
+
+    tipos_de_cafe: Mapped[list["BlendHasTipoDeCafe"]] = relationship(back_populates="blend")
+    lotes: Mapped[list["Lote"]] = relationship(back_populates="blend")
+
+
+class BlendHasTipoDeCafe(Base):
+    __tablename__ = "blend_has_tipo_de_cafe"
+
+    blend_id: Mapped[int] = mapped_column(ForeignKey("blend.id"), primary_key=True)
+    tipo_de_cafe_id: Mapped[int] = mapped_column(ForeignKey("tipo_de_cafe.id"), primary_key=True)
+    porcentaje: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+
+    blend: Mapped["Blend"] = relationship(back_populates="tipos_de_cafe")
+    tipo_de_cafe: Mapped["TipoDeCafe"] = relationship(back_populates="blends")
+
+
+class Lote(Base):
+    __tablename__ = "lote"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)  # MEDIUMINT UNSIGNED compatible
+    tipo: Mapped[LoteTipo] = mapped_column(
+        Enum(LoteTipo, values_callable=lambda e: [m.value for m in e], native_enum=True, name="lote_tipo_enum"),
         nullable=False,
-        index=True,
     )
-    estado: Mapped[str] = mapped_column(String(20), nullable=False)  # cerrada, abierta
-    kilos: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
-    fecha_creacion: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    lote_ref: Mapped[str] = mapped_column(String(100), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    estado: Mapped[LoteEstado] = mapped_column(
+        Enum(LoteEstado, values_callable=lambda e: [m.value for m in e], native_enum=True, name="lote_estado_enum"),
+        nullable=False,
+    )
+    fecha_vencimiento: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    humedad: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    kg_disponibles: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    kg_reales: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    ubicacion_fisica: Mapped[str] = mapped_column(String(50), nullable=False)
+    observaciones: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tipo_de_cafe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tipo_de_cafe.id"), nullable=True, index=True)
+    blend_id: Mapped[Optional[int]] = mapped_column(ForeignKey("blend.id"), nullable=True, index=True)
+    # Sin FK: la tabla "orden_tueste" no existe todavía porque producción no
+    # define OrdenTueste, y la referencia rota hace fallar
+    # Base.metadata.create_all() con NoReferencedTableError, lo que impide crear
+    # esta tabla en absoluto. Hay que rehacer la FK con
+    # ForeignKey("orden_tueste.id") cuando exista ese modelo, y regenerar la
+    # migración en ese momento.
+    orden_tueste_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
-    # Relationships
-    stock = relationship("Stock", back_populates="bolsas", lazy="selectin")
-
-    def __repr__(self) -> str:
-        return f"<Bolsa(id={self.id}, stock_id={self.stock_id}, estado={self.estado}, kilos={self.kilos})>"
+    tipo_de_cafe: Mapped[Optional["TipoDeCafe"]] = relationship(back_populates="lotes")
+    blend: Mapped[Optional["Blend"]] = relationship(back_populates="lotes")
+    # Deshabilitado: la anotación Mapped[Optional["object"]] hace que SQLAlchemy
+    # trate "object" como el nombre de una entidad y rompe configure_mappers(),
+    # lo que impide instanciar cualquier objeto ORM del módulo. La tabla
+    # "orden_tueste" todavía no existe porque producción no define OrdenTueste.
+    # Se reactiva junto con ese modelo, usando la anotación correcta.
+    # orden_tueste: Mapped[Optional["object"]] = relationship()
