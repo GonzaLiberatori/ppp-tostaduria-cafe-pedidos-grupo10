@@ -1,203 +1,464 @@
-from typing import Optional, List
-from datetime import date
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import List
+from decimal import Decimal
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.modules.pedidos.services import PedidoService
-from app.modules.pedidos.schemas import (
-    PedidoCreate,
-    PedidoUpdate,
-    PedidoRead,
-    PedidoDetailRead,
-    PedidoListRead,
-    EstadoPedidoEnum,
-    PedidoEstadoHistorialRead,
-)
-from app.modules.auth.models import Usuario
+from app.modules.auth.schemas import TokenData
+
+from app.modules.pedidos import schemas, services
 
 
 router = APIRouter(prefix="/pedidos", tags=["Pedidos"])
-pedido_service = PedidoService()
 
 
-@router.post(
-    "/",
-    response_model=PedidoDetailRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Crear nuevo pedido",
-    description="Crea un pedido validando stock, consumiendo FIFO y actualizando cuenta corriente B2B.",
-)
+# Dependency para servicios
+def get_pedido_service(db: Session = Depends(get_db)) -> services.PedidoService:
+    return services.PedidoService(db)
+
+
+def get_stock_service(db: Session = Depends(get_db)) -> services.StockService:
+    return services.StockService(db)
+
+
+def get_catalogo_service(db: Session = Depends(get_db)) -> services.CatalogoService:
+    return services.CatalogoService(db)
+
+
+# Dependency para usuario autenticado
+def get_current_user_required(
+    current_user: TokenData = Depends(get_current_user)
+) -> TokenData:
+    return current_user
+
+
+# ==================== PEDIDOS ====================
+
+@router.post("/", response_model=schemas.PedidoResponse, status_code=status.HTTP_201_CREATED)
 def crear_pedido(
-    dto: PedidoCreate,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
+    pedido: schemas.PedidoCreate,
+    current_user: TokenData = Depends(get_current_user),
+    service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Crea un nuevo pedido."""
+    """Crear un nuevo pedido con detalles y descontar stock"""
+    # El empleado que crea el pedido es el usuario actual
+    # Buscar el empleado por email
+    from app.modules.pedidos import crud
+    from app.modules.auth.models import Cuenta
+    from app.modules.pedidos.models import Persona, Empleado
+    
+    cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+    if not cuenta:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    
+    persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first()
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona no encontrada")
+    
+    empleado = service.db.query(Empleado).filter(Empleado.persona_id == persona.id).first()
+    if not empleado:
+        raise HTTPException(status_code=403, detail="El usuario no es un empleado")
+    
     try:
-        pedido = pedido_service.crear_pedido(dto, current_user.id, db)
-        db.commit()
-        return pedido
+        db_pedido = service.crear_pedido_completo(pedido, empleado.persona_id)
+        return db_pedido
     except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get(
-    "/",
-    response_model=List[PedidoListRead],
-    summary="Listar pedidos con filtros",
-    description="Lista paginada de pedidos con filtros opcionales por estado, cliente, fechas y búsqueda.",
-)
+@router.get("/", response_model=List[schemas.PedidoListRead])
 def listar_pedidos(
-    estado: Optional[EstadoPedidoEnum] = Query(None, description="Filtrar por estado"),
-    cliente_id: Optional[int] = Query(None, description="Filtrar por ID de cliente"),
-    fecha_desde: Optional[date] = Query(None, description="Fecha desde (YYYY-MM-DD)"),
-    fecha_hasta: Optional[date] = Query(None, description="Fecha hasta (YYYY-MM-DD)"),
-    search: Optional[str] = Query(None, description="Búsqueda por texto (cliente, contacto, observaciones)"),
-    page: int = Query(1, ge=1, description="Número de página"),
-    page_size: int = Query(20, ge=1, le=100, description="Tamaño de página"),
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 100,
+    estado: Optional[str] = None,
+    cliente_persona_id: Optional[int] = None,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+    q: Optional[str] = None,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Lista pedidos con filtros y paginación."""
-    pedidos, total = pedido_service.get_pedidos_con_filtros(
-        estado=estado,
-        cliente_id=cliente_id,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        search=search,
-        page=page,
-        page_size=page_size,
-        session=db,
-    )
-    # Agregar headers de paginación
-    return pedidos
-
-
-@router.get(
-    "/cliente/{cliente_id}",
-    response_model=List[PedidoListRead],
-    summary="Pedidos por cliente",
-    description="Retorna todos los pedidos de un cliente específico.",
-)
-def listar_pedidos_por_cliente(
-    cliente_id: int,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    """Obtiene todos los pedidos de un cliente."""
-    pedidos, _ = pedido_service.get_pedidos_con_filtros(
-        cliente_id=cliente_id,
-        page=1,
-        page_size=1000,
-        session=db,
+    """Listar todos los pedidos con filtros y paginación"""
+    from app.modules.pedidos import crud
+    pedidos = crud.get_pedidos_con_filtros(
+        service.db, skip, limit, estado, None, None, None, None
     )
     return pedidos
 
 
-@router.get(
-    "/{pedido_id}",
-    response_model=PedidoDetailRead,
-    summary="Obtener detalle de pedido",
-    description="Retorna el detalle completo de un pedido incluyendo items y cliente.",
-)
+@router.get("/{pedido_id}", response_model=schemas.PedidoDetailRead)
 def obtener_pedido(
     pedido_id: int,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Obtiene el detalle de un pedido."""
-    pedido = pedido_service.get_pedido_detalle(pedido_id, db)
+    """Obtener un pedido por ID con items, cliente e historial"""
+    pedido = service.obtener_pedido_por_id(pedido_id)
     if not pedido:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido no encontrado")
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
     return pedido
 
 
-@router.patch(
-    "/{pedido_id}",
-    response_model=PedidoDetailRead,
-    summary="Actualizar pedido",
-    description="Actualiza campos editables: medio_contacto, observaciones. No permite cambiar items, cliente, fecha o total.",
-)
+@router.patch("/{pedido_id}/estado", response_model=schemas.PedidoResponse)
+def cambiar_estado_pedido(
+    pedido_id: int,
+    estado: str,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
+):
+    """Cambiar estado del pedido (PENDIENTE, LISTO, ENTREGADO)"""
+    try:
+        # Obtener usuario_id del usuario autenticado
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona
+        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        usuario_id = persona.id if persona else None
+        
+        pedido = service.cambiar_estado_pedido(pedido_id, estado, usuario_id)
+        if not pedido:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        return pedido
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/{pedido_id}", response_model=schemas.PedidoDetailRead)
 def actualizar_pedido(
     pedido_id: int,
-    dto: PedidoUpdate,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
+    pedido_update: schemas.PedidoUpdate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Actualiza campos editables de un pedido."""
-    from app.modules.pedidos.crud import get_pedido as crud_get_pedido, update_pedido as crud_update_pedido
-    
-    pedido = crud_get_pedido(db, pedido_id)
-    if not pedido:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido no encontrado")
-    
-    # Solo permitir actualizar campos editables
-    update_data = dto.model_dump(exclude_unset=True)
-    if "estado" in update_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Use el endpoint PATCH /pedidos/{id}/estado para cambiar estado"
-        )
-    
+    """Actualizar un pedido (estado, método de despacho, observaciones). No permite cambiar detalles ni totales."""
     try:
-        pedido = crud_update_pedido(db, pedido=pedido, **update_data)
-        db.commit()
-        return pedido
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno")
-
-
-@router.patch(
-    "/{pedido_id}/estado",
-    response_model=PedidoDetailRead,
-    summary="Cambiar estado de pedido",
-    description="Cambia el estado validando transiciones permitidas. Efectos: Entregado suma a cuenta corriente B2B; reversión resta.",
-)
-def cambiar_estado(
-    pedido_id: int,
-    nuevo_estado: EstadoPedidoEnum,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    """Cambia el estado de un pedido."""
-    try:
-        pedido = pedido_service.cambiar_estado(pedido_id, nuevo_estado, current_user.id, db)
-        db.commit()
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona
+        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        usuario_id = persona.id if persona else None
+        
+        pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=None, usuario_id=usuario_id)
+        if not pedido:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido
     except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete(
-    "/{pedido_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Eliminar pedido",
-    description="Elimina un pedido solo si está en estado Pendiente. Revierte stock FIFO y cuenta corriente B2B.",
-)
+@router.put("/{pedido_id}/con-detalles", response_model=schemas.PedidoDetailRead)
+def actualizar_pedido_con_detalles(
+    pedido_id: int,
+    data: schemas.PedidoUpdateConDetalles,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
+):
+    """Actualizar un pedido con nuevos detalles (recalcula totales y ajusta stock)"""
+    try:
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona
+        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        usuario_id = persona.id if persona else None
+        
+        update_data = {}
+        if data.estado is not None:
+            update_data['estado'] = data.estado
+        if data.metodo_de_despacho is not None:
+            update_data['metodo_de_despacho'] = data.metodo_de_despacho
+        if data.observaciones is not None:
+            update_data['observaciones'] = data.observaciones
+        if data.medio_contacto is not None:
+            update_data['medio_contacto'] = data.medio_contacto
+        pedido_update = schemas.PedidoUpdate(**update_data)
+        pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=data.detalles, usuario_id=usuario_id)
+        if not pedido:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        return pedido
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_pedido(
     pedido_id: int,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
 ):
-    """Elimina un pedido (solo Pendiente)."""
+    """Eliminar un pedido. Si está PENDIENTE, devuelve el stock a los lotes."""
     try:
-        pedido_service.eliminar_pedido(pedido_id, db)
-        db.commit()
+        resultado = service.eliminar_pedido(pedido_id)
+        if not resultado:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
     except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/cliente/{cliente_persona_id}", response_model=List[schemas.PedidoResponse])
+def obtener_pedidos_cliente(
+    cliente_persona_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
+):
+    """Obtener pedidos de un cliente"""
+    return service.obtener_pedidos_cliente(cliente_persona_id)
+
+
+@router.get("/pendientes/", response_model=List[schemas.PedidoResponse])
+def obtener_pedidos_pendientes(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
+):
+    """Obtener pedidos pendientes"""
+    return service.obtener_pedidos_pendientes()
+
+
+@router.get("/listos/", response_model=List[schemas.PedidoResponse])
+def obtener_pedidos_listos(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoService = Depends(get_pedido_service)
+):
+    """Obtener pedidos listos para entrega"""
+    return service.obtener_pedidos_listos()
+
+
+# ==================== STOCK ====================
+
+@router.get("/stock/disponible", response_model=List[schemas.LoteResponse])
+def obtener_stock_disponible(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.StockService = Depends(get_stock_service)
+):
+    """Obtener todo el stock disponible (café tostado)"""
+    return service.obtener_stock_disponible()
+
+
+@router.get("/stock/tipo-cafe/{tipo_de_cafe_id}", response_model=List[schemas.LoteResponse])
+def obtener_stock_tipo_cafe(
+    tipo_de_cafe_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.StockService = Depends(get_stock_service)
+):
+    """Obtener stock disponible para un tipo de café específico"""
+    return service.obtener_stock_por_tipo_cafe(tipo_de_cafe_id)
+
+
+@router.get("/stock/blend/{blend_id}", response_model=List[schemas.LoteResponse])
+def obtener_stock_blend(
+    blend_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.StockService = Depends(get_stock_service)
+):
+    """Obtener stock disponible para un blend específico"""
+    return service.obtener_stock_por_blend(blend_id)
+
+
+@router.get("/stock/tipo-cafe/{tipo_de_cafe_id}/total-kg")
+def total_kg_tipo_cafe(
+    tipo_de_cafe_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.StockService = Depends(get_stock_service)
+):
+    """Obtener total de kg disponibles para un tipo de café"""
+    total = service.total_kg_disponibles_tipo_cafe(tipo_de_cafe_id)
+    return {"tipo_de_cafe_id": tipo_de_cafe_id, "total_kg_disponibles": total}
+
+
+@router.get("/stock/blend/{blend_id}/total-kg")
+def total_kg_blend(
+    blend_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.StockService = Depends(get_stock_service)
+):
+    """Obtener total de kg disponibles para un blend"""
+    total = service.total_kg_disponibles_blend(blend_id)
+    return {"blend_id": blend_id, "total_kg_disponibles": total}
+
+
+# ==================== CATÁLOGO ====================
+
+# Tipo de Café
+@router.post("/catalogo/tipos-cafe", response_model=schemas.TipoDeCafeResponse, status_code=status.HTTP_201_CREATED)
+def crear_tipo_cafe(
+    tipo: schemas.TipoDeCafeCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.crear_tipo_cafe(tipo)
+
+
+@router.get("/catalogo/tipos-cafe", response_model=List[schemas.TipoDeCafeResponse])
+def listar_tipos_cafe(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.listar_tipos_cafe()
+
+
+@router.get("/catalogo/tipos-cafe/{tipo_id}", response_model=schemas.TipoDeCafeResponse)
+def obtener_tipo_cafe(
+    tipo_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    from app.modules.pedidos import crud
+    tipo = crud.get_tipo_de_cafe(service.db, tipo_id)
+    if not tipo:
+        raise HTTPException(status_code=404, detail="Tipo de café no encontrado")
+    return tipo
+
+
+# Blend
+@router.post("/catalogo/blends", response_model=schemas.BlendResponse, status_code=status.HTTP_201_CREATED)
+def crear_blend(
+    blend: schemas.BlendCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.crear_blend(blend)
+
+
+@router.get("/catalogo/blends", response_model=List[schemas.BlendResponse])
+def listar_blends(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.listar_blends()
+
+
+@router.get("/catalogo/blends/{blend_id}", response_model=schemas.BlendResponse)
+def obtener_blend(
+    blend_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    from app.modules.pedidos import crud
+    blend = crud.get_blend(service.db, blend_id)
+    if not blend:
+        raise HTTPException(status_code=404, detail="Blend no encontrado")
+    return blend
+
+
+# Molienda
+@router.post("/catalogo/moliendas", response_model=schemas.MoliendaResponse, status_code=status.HTTP_201_CREATED)
+def crear_molienda(
+    molienda: schemas.MoliendaCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.crear_molienda(molienda)
+
+
+@router.get("/catalogo/moliendas", response_model=List[schemas.MoliendaResponse])
+def listar_moliendas(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.listar_moliendas()
+
+
+@router.get("/catalogo/moliendas/{molienda_id}", response_model=schemas.MoliendaResponse)
+def obtener_molienda(
+    molienda_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    from app.modules.pedidos import crud
+    molienda = crud.get_molienda(service.db, molienda_id)
+    if not molienda:
+        raise HTTPException(status_code=404, detail="Molienda no encontrada")
+    return molienda
+
+
+# Perfil de Tostado
+@router.post("/catalogo/perfiles-tostado", response_model=schemas.PerfilDeTostadoResponse, status_code=status.HTTP_201_CREATED)
+def crear_perfil_tostado(
+    perfil: schemas.PerfilDeTostadoCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.crear_perfil_tostado(perfil)
+
+
+@router.get("/catalogo/perfiles-tostado", response_model=List[schemas.PerfilDeTostadoResponse])
+def listar_perfiles_tostado(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.listar_perfiles_tostado()
+
+
+@router.get("/catalogo/perfiles-tostado/{perfil_id}", response_model=schemas.PerfilDeTostadoResponse)
+def obtener_perfil_tostado(
+    perfil_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    from app.modules.pedidos import crud
+    perfil = crud.get_perfil_de_tostado(service.db, perfil_id)
+    if not perfil:
+        raise HTTPException(status_code=404, detail="Perfil de tostado no encontrado")
+    return perfil
+
+
+# Orden de Tueste
+@router.post("/catalogo/ordenes-tueste", response_model=schemas.OrdenTuesteResponse, status_code=status.HTTP_201_CREATED)
+def crear_orden_tueste(
+    orden: schemas.OrdenTuesteCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.crear_orden_tueste(orden)
+
+
+@router.get("/catalogo/ordenes-tueste", response_model=List[schemas.OrdenTuesteResponse])
+def listar_ordenes_tueste(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.listar_ordenes_tueste()
+
+
+@router.get("/catalogo/ordenes-tueste/{orden_id}", response_model=schemas.OrdenTuesteResponse)
+def obtener_orden_tueste(
+    orden_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    from app.modules.pedidos import crud
+    orden = crud.get_orden_tueste(service.db, orden_id)
+    if not orden:
+        raise HTTPException(status_code=404, detail="Orden de tueste no encontrada")
+    return orden
+
+
+# Lote
+@router.post("/catalogo/lotes", response_model=schemas.LoteResponse, status_code=status.HTTP_201_CREATED)
+def crear_lote(
+    lote: schemas.LoteCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.crear_lote(lote)
+
+
+@router.get("/catalogo/lotes", response_model=List[schemas.LoteResponse])
+def listar_lotes(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    return service.listar_lotes()
+
+
+@router.get("/catalogo/lotes/{lote_id}", response_model=schemas.LoteResponse)
+def obtener_lote(
+    lote_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.CatalogoService = Depends(get_catalogo_service)
+):
+    from app.modules.pedidos import crud
+    lote = crud.get_lote(service.db, lote_id)
+    if not lote:
+        raise HTTPException(status_code=404, detail="Lote no encontrado")
+    return lote

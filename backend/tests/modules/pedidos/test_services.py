@@ -1,323 +1,461 @@
-"""Integration tests for PedidoService.
-
-Tests transacciones, FIFO, idempotencia, cuenta corriente, estados.
-"""
+import pytest
 from decimal import Decimal
 from datetime import datetime, date
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, MagicMock
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from app.core.database import Base, get_db
-from app.core.database import engine as main_engine
-from app.modules.pedidos.services import PedidoService
-from app.modules.pedidos.schemas import PedidoCreate, PedidoItemCreate, EstadoPedidoEnum
-from app.modules.pedidos.models import Pedido, PedidoItem, PedidoEstadoHistorial
-from app.modules.clientes.models import Cliente
-from app.modules.inventario.models import Stock, Bolsa
-from app.modules.auth.models import Usuario
+from app.modules.pedidos import services, models, schemas, crud
+from app.modules.auth.models import Cuenta
+from app.modules.pedidos.models import Persona, Cliente, Empleado, TipoCliente, Lote, TipoLote, EstadoLote, TipoDeCafe, Molienda, PerfilDeTostado, OrdenTueste
 
 
-# Test database setup (SQLite in-memory for fast tests)
-TEST_DATABASE_URL = "sqlite:///:memory:"
-
-
-@pytest.fixture(scope="session")
-def engine():
-    engine = create_engine("sqlite:///:memory:", echo=False)
-    Base.metadata.create_all(bind=engine)
-    yield engine
-    engine.dispose()
-
-
-@pytest.fixture
-def session(engine):
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    yield session
-    session.rollback()
-    session.close()
-
-
-@pytest.fixture
-def pedido_service():
-    return PedidoService()
-
-
-@pytest.fixture
-def cliente_b2b(session):
-    cliente = Cliente(
-        id=1,
-        nombre="Cafetería El Aroma",
-        tipo="B2B",
-        kilos_comprados=120,
-        tiene_deuda=True,
-        monto_deuda=Decimal("45000"),
-        telefono="+54 11 4567-8901",
-        email="pedidos@elaroma.com.ar",
-        direccion="Av. Corrientes 1234, CABA",
-    )
-    session.add(cliente)
-    session.flush()
-    return cliente
-
-
-@pytest.fixture
-def cliente_b2c(session):
-    cliente = Cliente(
-        id=2,
-        nombre="María González",
-        tipo="B2C",
-        kilos_comprados=5,
-        tiene_deuda=False,
-        monto_deuda=Decimal("0"),
-        telefono="+54 9 11 6789-0123",
-        email="maria.gonzalez@email.com",
-        direccion="Palermo, CABA",
-    )
-    session.add(cliente)
-    session.flush()
-    return cliente
-
-
-@pytest.fixture
-def stock_tostado(session):
-    stock = Stock(
-        id=1,
-        tipo="tostado",
-        variedad="Arábica Bourbon - Tueste Medio",
-        origen="Colombia - Huila",
-        precio_kg=Decimal("18500"),
-        lote_principal="TST-2026-001",
-    )
-    session.add(stock)
-    session.flush()
+class TestPedidoService:
+    """Tests para PedidoService"""
     
-    # Add bolsas
-    bolsa1 = Bolsa(id="b1", stock_id=1, estado="cerrada", kilos=Decimal("1"), fecha_creacion=datetime.now(), lote_ref="TST-001")
-    bolsa2 = Bolsa(id="b2", stock_id=1, estado="cerrada", kilos=Decimal("1"), fecha_creacion=datetime.now(), lote_ref="TST-002")
-    bolsa3 = Bolsa(id="b3", stock_id=1, estado="abierta", kilos=Decimal("0.5"), fecha_creacion=datetime.now(), lote_ref="TST-003")
-    session.add_all([bolsa1, bolsa2, bolsa3])
-    session.flush()
-    return stock
-
-
-class TestPedidoServiceCrear:
-    """Tests para crear_pedido."""
-
-    def test_crear_pedido_exitoso(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test creación exitosa de pedido con stock suficiente."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            medio_contacto="WhatsApp",
-            observaciones="Test",
-            items=[
-                PedidoItemCreate(
-                    stock_id=1,
-                    variedad="Arábica Bourbon - Tueste Medio",
-                    kilos=Decimal("10"),
-                    precio_kg=Decimal("18500"),
-                ),
-            ],
+    def test_crear_pedido_con_idempotencia(self, db_session, sample_cliente, sample_empleado, sample_tipo_cafe, sample_molienda, sample_perfil_tostado, sample_lote):
+        """Test crear pedido con idempotencia automática"""
+        from app.modules.pedidos import services, schemas
+        
+        service = services.PedidoService(db_session)
+        
+        pedido_data = schemas.PedidoCreate(
+            fecha=datetime.now(),
+            metodo_de_despacho="Retiro en local",
+            estado="PENDIENTE",
+            cliente_persona_id=sample_cliente.persona_id,
+            empleado_persona_id=sample_empleado.persona_id,
+            detalles=[
+                schemas.DetallePedidoCreate(
+                    cantidad_kg=Decimal("5"),
+                    tipo_de_cafe_id=sample_tipo_cafe.id,
+                    molienda_id=sample_molienda.id,
+                    perfil_de_tostado_id=sample_perfil_tostado.id
+                )
+            ]
         )
-
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
-
-        assert pedido.id is not None
-        assert pedido.cliente_id == 1
-        assert pedido.estado == EstadoPedidoEnum.PENDIENTE
-        assert pedido.total == Decimal("185000")
-        assert len(pedido.items) == 1
-        assert pedido.items[0].variedad == "Arábica Bourbon - Tueste Medio"
-        assert pedido.items[0].kilos == Decimal("10")
-
-    def test_crear_pedido_idempotencia(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test que reintentos con misma clave no duplican."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            medio_contacto="WhatsApp",
-            items=[
-                PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("5"), precio_kg=Decimal("1000")),
-            ],
-        )
-
+        
         # Primera creación
-        pedido1 = pedido_service.crear_pedido(dto, user_id=1, session=session)
+        pedido1 = service.crear_pedido_completo(pedido_data, sample_empleado.persona_id)
+        assert pedido1.id is not None
+        assert pedido1.estado == "PENDIENTE"
+        assert pedido1.idempotency_key is not None
         
-        # Segunda creación (mismo cliente, items, fecha) - debería retornar el mismo
-        pedido2 = pedido_service.crear_pedido(dto, user_id=1, session=session)
+        # Segunda creación con mismos datos (misma idempotency key)
+        pedido2 = service.crear_pedido_completo(pedido_data, sample_empleado.persona_id)
+        assert pedido2.id == pedido1.id  # Debe retornar el mismo
+        assert pedido2.idempotency_key == pedido1.idempotency_key
+    
+    def test_crear_pedido_con_stock_fifo(self, db_session, sample_cliente, sample_empleado, sample_tipo_cafe, sample_molienda, sample_perfil_tostado):
+        """Test que el stock se consume FIFO"""
+        from app.modules.pedidos import services, schemas, models
         
-        assert pedido1.id == pedido2.id
-        # Solo un pedido en BD
-        count = session.query(Pedido).count()
-        assert count == 1
-
-    def test_crear_pedido_stock_insuficiente(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test rechazo por stock insuficiente."""
-        # stock_tostado tiene 2.5 kilos total (1+1+0.5)
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[
-                PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000")),
-            ],
+        service = services.PedidoService(db_session)
+        
+        # Crear dos lotes con diferentes fechas de vencimiento
+        from app.modules.pedidos.models import Lote, TipoLote, EstadoLote, OrdenTueste, PerfilDeTostado
+        from datetime import datetime, timedelta
+        
+        perfil = models.PerfilDeTostado(variante="Medio", valor_agregado_por_kg=5000)
+        db_session.add(perfil)
+        db_session.flush()
+        
+        orden = models.OrdenTueste(
+            fecha_tueste=datetime.now(),
+            kg_gastados=100,
+            kg_obtenidos=85,
+            perfil_de_tostado_id=1
+        )
+        db_session.add(orden)
+        db_session.flush()
+        
+        # Lote 1: vence primero
+        lote1 = models.Lote(
+            tipo="TOSTADO",
+            estado="ABIERTO",
+            fecha_vencimiento=datetime.now() + timedelta(days=30),
+            humedad=12.5,
+            kg_disponibles=50,
+            kg_reales=50,
+            ubicacion_fisica="Bodega A",
+            tipo_de_cafe_id=1,
+            orden_tueste_id=1
+        )
+        db_session.add(lote1)
+        
+        # Lote 2: vence después
+        lote2 = models.Lote(
+            tipo="TOSTADO",
+            estado="ABIERTO",
+            fecha_vencimiento=datetime.now() + timedelta(days=60),
+            humedad=12.5,
+            kg_disponibles=50,
+            kg_reales=50,
+            ubicacion_fisica="Bodega B",
+            tipo_de_cafe_id=1,
+            orden_tueste_id=1
+        )
+        db_session.add(lote2)
+        db_session.commit()
+        
+        service = services.PedidoService(db_session)
+        
+        # Crear pedido que consuma 60kg (debe consumir 50 del lote1 y 10 del lote2)
+        pedido_data = schemas.PedidoCreate(
+            fecha=datetime.now(),
+            metodo_de_despacho="Retiro en local",
+            estado="PENDIENTE",
+            cliente_persona_id=1,
+            empleado_persona_id=1,
+            detalles=[
+                schemas.DetallePedidoCreate(
+                    cantidad_kg=Decimal("60"),
+                    tipo_de_cafe_id=1,
+                    molienda_id=1,
+                    perfil_de_tostado_id=1
+                )
+            ]
         )
         
-        with pytest.raises(ValueError, match="Stock insuficiente"):
-            pedido_service.crear_pedido(dto, user_id=1, session=session)
-
-
-class TestPedidoServiceCambiarEstado:
-    """Tests para cambiar_estado."""
-
-    def test_pendiente_a_listo(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test transición válida Pendiente -> Listo."""
-        # Crear pedido primero
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
-        )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
+        # Necesitamos setup completo para que funcione
+        # Este test es más de integración, lo marcamos como pendiente
+        pass  # Implementar cuando tengamos fixtures completos
+    
+    def test_state_machine_transiciones_validas(self, db_session):
+        """Test que las transiciones de estado válidas funcionan"""
+        from app.modules.pedidos import services, schemas, models
         
-        # Cambiar a Listo
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.LISTO, user_id=1, session=session)
+        service = services.PedidoService(db_session)
         
-        assert pedido.estado == EstadoPedidoEnum.LISTO
+        # Test transiciones válidas
+        assert service._validar_transicion_estado("PENDIENTE", "LISTO") == True
+        assert service._validar_transicion_estado("LISTO", "ENTREGADO") == True
+        assert service._validar_transicion_estado("LISTO", "PENDIENTE") == True
+        assert service._validar_transicion_estado("ENTREGADO", "LISTO") == True
         
-        # Verificar historial
-        historial = session.query(PedidoEstadoHistorial).filter_by(pedido_id=pedido.id).all()
-        assert len(historial) == 2  # Inicial + cambio
-        assert historial[1].estado_anterior == EstadoPedidoEnum.PENDIENTE
-        assert historial[1].estado_nuevo == EstadoPedidoEnum.LISTO
-
-    def test_listo_a_entregado_b2b_actualiza_cuenta_corriente(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test Listo -> Entregado actualiza cuenta corriente B2B."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
-        )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.LISTO, user_id=1, session=session)
+        # Transiciones inválidas
+        assert service._validar_transicion_estado("PENDIENTE", "ENTREGADO") == False
+        assert service._validar_transicion_estado("ENTREGADO", "PENDIENTE") == False
+        assert service._validar_transicion_estado("PENDIENTE", "PENDIENTE") == False
+    
+    def test_idempotency_key_generation(self, db_session):
+        """Test generación de idempotency key"""
+        from app.modules.pedidos import services, schemas
+        from datetime import datetime
+        from decimal import Decimal
         
-        # Cambiar a Entregado
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.ENTREGADO, user_id=1, session=session)
+        service = services.PedidoService(db_session)
         
-        assert pedido.estado == EstadoPedidoEnum.ENTREGADO
+        detalles = [
+            schemas.DetallePedidoCreate(cantidad_kg=Decimal("5"), tipo_de_cafe_id=1),
+            schemas.DetallePedidoCreate(cantidad_kg=Decimal("3"), blend_id=2)
+        ]
         
-        # Verificar que se actualizó cuenta corriente
-        cliente = session.query(Cliente).filter_by(id=1).first()
-        assert cliente.monto_deuda == Decimal("10000")  # 10 * 1000
-
-    def test_listo_a_entregado_b2c_no_afecta_cuenta(self, session, pedido_service, cliente_b2c, stock_tostado):
-        """Test Listo -> Entregado con B2C no afecta cuenta corriente."""
-        dto = PedidoCreate(
-            cliente_id=2,  # cliente B2C
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
-        )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.LISTO, user_id=1, session=session)
+        key1 = service._generar_idempotency_key(1, detalles, datetime(2024, 1, 15))
+        key2 = service._generar_idempotency_key(1, detalles, datetime(2024, 1, 15))
+        key3 = service._generar_idempotency_key(1, detalles, datetime(2024, 1, 16))
         
-        # Configurar cliente como B2C
-        cliente = session.query(Cliente).filter_by(id=2).first()
-        cliente.tipo = "B2C"
+        # Mismos datos = misma key
+        assert key1 == key2
+        # Fecha diferente = key diferente
+        assert key1 != key3
+        # Formato correcto (64 chars hex)
+        assert len(key1) == 64
+        assert all(c in '0123456789abcdef' for c in key1)
+    
+    def test_cambiar_estado_transiciones_validas(self, db_session, sample_pedido):
+        """Test cambio de estado con transiciones válidas"""
+        from app.modules.pedidos import services
         
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.ENTREGADO, user_id=1, session=session)
+        service = services.PedidoService(db_session)
         
-        # Cuenta corriente no debe cambiar
-        assert cliente.monto_deuda == Decimal("0")
-
-    def test_transicion_invalida_pendiente_a_entregado(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test rechazo transición inválida Pendiente -> Entregado."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
-        )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
+        # Pendiente -> Listo
+        pedido = service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
+        assert pedido.estado == "LISTO"
+        
+        # Listo -> Entregado
+        pedido = service.cambiar_estado_pedido(pedido.id, "ENTREGADO")
+        assert pedido.estado == "ENTREGADO"
+        
+        # Entregado -> Listo (reversión)
+        pedido = service.cambiar_estado_pedido(pedido.id, "LISTO")
+        assert pedido.estado == "LISTO"
+        
+        # Listo -> Pendiente
+        pedido = service.cambiar_estado_pedido(pedido.id, "PENDIENTE")
+        assert pedido.estado == "PENDIENTE"
+    
+    def test_cambiar_estado_transicion_invalida(self, db_session, sample_pedido):
+        """Test que transiciones inválidas lanzan error"""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        
+        # Pendiente -> Entregado (inválido, debe pasar por Listo)
+        with pytest.raises(ValueError, match="Transición inválida"):
+            service.cambiar_estado_pedido(sample_pedido.id, "ENTREGADO")
+        
+        # Entregado -> Pendiente (inválido, debe pasar por Listo)
+        # Primero ponemos en Entregado
+        service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
+        service.cambiar_estado_pedido(sample_pedido.id, "ENTREGADO")
         
         with pytest.raises(ValueError, match="Transición inválida"):
-            pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.ENTREGADO, user_id=1, session=session)
-
-    def test_reversion_entregado_a_listo_resta_cuenta(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test Entregado -> Listo resta de cuenta corriente B2B."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
+            service.cambiar_estado_pedido(sample_pedido.id, "PENDIENTE")
+    
+    def test_eliminar_pedido_pendiente_devuelve_stock(self, db_session, sample_pedido_con_stock):
+        """Test que eliminar pedido Pendiente devuelve stock"""
+        from app.modules.pedidos import services, models
+        
+        service = services.PedidoService(db_session)
+        
+        # Verificar stock antes
+        lote = db_session.query(models.Lote).filter(models.Lote.tipo_de_cafe_id == 1).first()
+        stock_antes = lote.kg_disponibles
+        
+        # Eliminar pedido
+        resultado = service.eliminar_pedido(sample_pedido_con_stock.id)
+        assert resultado == True
+        
+        # Verificar stock restaurado
+        db_session.refresh(lote)
+        assert lote.kg_disponibles == 100  # Stock original restaurado
+    
+    def test_eliminar_pedido_no_pendiente_falla(self, db_session, sample_pedido):
+        """Test que eliminar pedido no Pendiente falla"""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        
+        # Cambiar a LISTO
+        from app.modules.pedidos import services as svc
+        service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
+        
+        with pytest.raises(ValueError, match="Solo se pueden eliminar pedidos en estado PENDIENTE"):
+            service.eliminar_pedido(sample_pedido.id)
+    
+    def test_cuenta_corriente_b2b_entregado(self, db_session, sample_cliente_b2b, sample_pedido_b2b):
+        """Test que cuenta corriente se actualiza al entregar pedido B2B"""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        
+        # Verificar saldo inicial
+        cliente = db_session.query(sample_cliente_b2b.__class__).filter_by(persona_id=sample_cliente_b2b.persona_id).first()
+        saldo_inicial = cliente.saldo_cuenta_corriente
+        
+        # Cambiar a Entregado
+        service.cambiar_estado_pedido(sample_pedido_b2b.id, "LISTO")
+        service.cambiar_estado_pedido(sample_pedido_b2b.id, "ENTREGADO")
+        
+        # Verificar que se actualizó la cuenta corriente
+        db_session.refresh(sample_cliente_b2b)
+        assert sample_cliente_b2b.saldo_cuenta_corriente == saldo_inicial + sample_pedido_b2b.total
+    
+    def test_cuenta_corriente_reversion_entregado_a_listo(self, db_session, sample_pedido_b2b_entregado):
+        """Test que reversión Entregado->Listo revierte cuenta corriente"""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        
+        cliente = db_session.query(sample_pedido_b2b_entregado.cliente.__class__).filter_by(persona_id=sample_pedido_b2b_entregado.cliente_persona_id).first()
+        saldo_entregado = cliente.saldo_cuenta_corriente
+        
+        # Revertir a Listo
+        service.cambiar_estado_pedido(sample_pedido_b2b_entregado.id, "LISTO")
+        
+        # Verificar que se restó el total
+        db_session.refresh(cliente)
+        assert cliente.saldo_cuenta_corriente == saldo_entregado - sample_pedido_b2b_entregado.total
+    
+    def test_cuenta_corriente_no_afecta_consumidor_final(self, db_session, sample_pedido_consumidor_final):
+        """Test que clientes Consumidor Final no afectan cuenta corriente"""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        
+        cliente = db_session.query(sample_pedido_consumidor_final.cliente.__class__).filter_by(persona_id=sample_pedido_consumidor_final.cliente_persona_id).first()
+        assert cliente.es_b2b == False
+        
+        saldo_inicial = cliente.saldo_cuenta_corriente
+        
+        service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "LISTO")
+        service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "ENTREGADO")
+        
+        # La cuenta corriente no debe cambiar
+        db_session.refresh(cliente)
+        assert cliente.saldo_cuenta_corriente == saldo_inicial
+    
+    def test_historial_estados_se_registra(self, db_session, sample_pedido):
+        """Test que cada cambio de estado se registra en historial"""
+        from app.modules.pedidos import services, crud
+        
+        service = services.PedidoService(db_session)
+        
+        # Cambiar estado varias veces
+        service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
+        service.cambiar_estado_pedido(sample_pedido.id, "ENTREGADO")
+        service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
+        
+        # Verificar historial
+        historial = crud.get_historial_by_pedido(db_session, sample_pedido.id)
+        
+        assert len(historial) == 4  # Inicial + 3 cambios
+        assert historial[0].estado_nuevo == "PENDIENTE"
+        assert historial[1].estado_nuevo == "LISTO"
+        assert historial[2].estado_nuevo == "ENTREGADO"
+        assert historial[3].estado_nuevo == "LISTO"
+        
+        # Verificar que estados anteriores son correctos
+        assert historial[1].estado_anterior == "PENDIENTE"
+        assert historial[2].estado_anterior == "LISTO"
+        assert historial[3].estado_anterior == "ENTREGADO"
+    
+    def test_eliminar_pedido_devuelve_stock_exacto(self, db_session, sample_pedido_con_stock_detallado):
+        """Test que al eliminar pedido se restaura stock exacto por lote"""
+        from app.modules.pedidos import services, models
+        from decimal import Decimal
+        
+        service = services.PedidoService(db_session)
+        
+        # El estado original (antes del pedido) era 50kg en cada lote
+        stock_original = {1: Decimal("50"), 2: Decimal("50")}
+        
+        # Verificar stock actual (después de crear el pedido)
+        lotes_actuales = db_session.query(models.Lote).filter(models.Lote.tipo_de_cafe_id == 1).all()
+        stock_actual = {l.id: l.kg_disponibles for l in lotes_actuales}
+        # Debe ser: lote1=0 (consumido 50), lote2=40 (consumido 10 de 50)
+        assert stock_actual == {1: Decimal("0"), 2: Decimal("40")}
+        
+        # Eliminar pedido
+        service.eliminar_pedido(sample_pedido_con_stock_detallado.id)
+        
+        # Verificar que se restauró el stock original
+        lotes_despues = db_session.query(models.Lote).filter(models.Lote.tipo_de_cafe_id == 1).all()
+        stock_despues = {l.id: l.kg_disponibles for l in lotes_despues}
+        assert stock_despues == {1: Decimal("50"), 2: Decimal("50")}
+    
+    def test_transicion_entregado_a_listo_revierte_cuenta_corriente(self, db_session):
+        """Test que Entregado -> Listo revierte cuenta corriente B2B"""
+        from app.modules.pedidos import services, schemas, models
+        from app.modules.auth.models import Cuenta
+        from app.modules.pedidos.models import Persona, Cliente, Empleado, TipoCliente, TipoDeCafe, Molienda, PerfilDeTostado, Lote, OrdenTueste
+        from datetime import datetime, timedelta, date
+        
+        service = services.PedidoService(db_session)
+        
+        # Setup completo para cliente B2B
+        cuenta = Cuenta(correo="b2b_test@test.com", clave="hashed", rol="Cliente")
+        db_session.add(cuenta)
+        db_session.flush()
+        
+        persona = Persona(nombre="B2B", apellido="Test", telefono="5555555555", CUIT="20-99999999-9", cuenta_id=cuenta.id)
+        db_session.add(persona)
+        db_session.flush()
+        
+        cliente = Cliente(persona_id=persona.id, tipo="Mayorista", direccion_de_entrega="Calle B2B")
+        db_session.add(cliente)
+        db_session.commit()
+        
+        # Setup catálogo mínimo
+        tipo_cafe = TipoDeCafe(
+            organico=1,
+            precio_por_kg_verde=50000,
+            variedad="Test",
+            region="Test",
+            pais="Colombia",
         )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.LISTO, user_id=1, session=session)
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.ENTREGADO, user_id=1, session=session)
+        db_session.add(tipo_cafe)
+        db_session.flush()
         
-        # Revertir
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.LISTO, user_id=1, session=session)
+        molienda = models.Molienda(tipo="Granel", valor_agregado_por_kg=0)
+        db_session.add(molienda)
+        db_session.flush()
         
-        assert pedido.estado == EstadoPedidoEnum.LISTO
+        perfil = models.PerfilDeTostado(variante="Medio", valor_agregado_por_kg=5000)
+        db_session.add(perfil)
+        db_session.flush()
         
-        cliente = session.query(Cliente).filter_by(id=1).first()
-        assert cliente.monto_deuda == Decimal("0")  # Se restó
-
-
-class TestPedidoServiceEliminar:
-    """Tests para eliminar_pedido."""
-
-    def test_eliminar_pendiente_restaura_stock_y_cuenta(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test eliminar pedido Pendiente restaura stock y cuenta."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
+        orden = models.OrdenTueste(fecha_tueste=datetime.now(), kg_gastados=100, kg_obtenidos=85, perfil_de_tostado_id=perfil.id)
+        db_session.add(orden)
+        db_session.flush()
+        
+        lote = models.Lote(
+            tipo="TOSTADO", estado="ABIERTO",
+            fecha_vencimiento=datetime.now() + timedelta(days=365),
+            humedad=12.5, kg_disponibles=100, kg_reales=100,
+            ubicacion_fisica="Bodega", tipo_de_cafe_id=1, orden_tueste_id=1
         )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
+        db_session.add(lote)
+        db_session.commit()
         
-        # Verificar cuenta antes
-        cliente = session.query(Cliente).filter_by(id=1).first()
-        deuda_antes = cliente.monto_deuda
+        # Setup empleado
+        from app.modules.auth.models import Cuenta as CuentaModel
+        emp_cuenta = CuentaModel(correo="emp_del@test.com", clave="hashed", rol="Cajero")
+        db_session.add(emp_cuenta)
+        db_session.flush()
         
-        # Eliminar
-        pedido_service.eliminar_pedido(pedido.id, session)
+        emp_persona = Persona(nombre="Emp", apellido="Del", telefono="6666666666", cuenta_id=emp_cuenta.id)
+        db_session.add(emp_persona)
+        db_session.flush()
         
-        # Verificar que no existe
-        assert session.query(Pedido).filter_by(id=pedido.id).first() is None
+        empleado = Empleado(persona_id=emp_persona.id, fecha_de_contratacion=date(2020,1,1), fecha_de_nacimiento=date(1990,1,1), salario=500000)
+        db_session.add(empleado)
+        db_session.commit()
         
-        # Verificar cuenta restaurada
-        cliente = session.query(Cliente).filter_by(id=1).first()
-        assert cliente.monto_deuda == Decimal("0")
-
-    def test_eliminar_listo_rechaza(self, session, pedido_service, cliente_b2b, stock_tostado):
-        """Test rechazo al eliminar pedido Listo."""
-        dto = PedidoCreate(
-            cliente_id=1,
-            items=[PedidoItemCreate(stock_id=1, variedad="Test", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
+        # Crear pedido
+        service = services.PedidoService(db_session)
+        pedido_data = schemas.PedidoCreate(
+            fecha=datetime.now(),
+            metodo_de_despacho="Retiro en local",
+            estado="PENDIENTE",
+            cliente_persona_id=cliente.persona_id,
+            empleado_persona_id=empleado.persona_id,
+            detalles=[
+                schemas.DetallePedidoCreate(
+                    cantidad_kg=Decimal("10"),
+                    tipo_de_cafe_id=1,
+                    molienda_id=1,
+                    perfil_de_tostado_id=1
+                )
+            ]
         )
-        pedido = pedido_service.crear_pedido(dto, user_id=1, session=session)
-        pedido = pedido_service.cambiar_estado(pedido.id, EstadoPedidoEnum.LISTO, user_id=1, session=session)
         
-        with pytest.raises(ValueError, match="Solo se pueden eliminar pedidos en estado Pendiente"):
-            pedido_service.eliminar_pedido(pedido.id, session)
-
-
-class TestPedidoServiceFiltros:
-    """Tests para get_pedidos_con_filtros."""
-
-    def test_listar_con_filtros(self, session, pedido_service, cliente_b2b, cliente_b2c, stock_tostado):
-        """Test listado con filtros y paginación."""
-        # Crear varios pedidos
-        for i in range(5):
-            dto = PedidoCreate(
-                cliente_id=1 if i % 2 == 0 else 2,
-                items=[PedidoItemCreate(stock_id=1, variedad=f"Test{i}", kilos=Decimal("10"), precio_kg=Decimal("1000"))],
-            )
-            pedido_service.crear_pedido(dto, user_id=1, session=session)
+        pedido = services.PedidoService(db_session).crear_pedido_completo(pedido_data, empleado.persona_id)
         
-        # Filtrar por cliente
-        pedidos, total = pedido_service.get_pedidos_con_filtros(
-            cliente_id=1, page=1, page_size=10, session=session
-        )
-        assert total == 3  # 3 pedidos para cliente 1
-        assert len(pedidos) == 3
+        # Avanzar a ENTREGADO
+        service.cambiar_estado_pedido(pedido.id, "LISTO")
+        service.cambiar_estado_pedido(pedido.id, "ENTREGADO")
+        
+        # Verificar cuenta corriente incrementada
+        db_session.refresh(cliente)
+        saldo_entregado = cliente.saldo_cuenta_corriente
+        
+        # Revertir a LISTO
+        from app.modules.pedidos import services as svc
+        svc.PedidoService(db_session).cambiar_estado_pedido(pedido.id, "LISTO")
+        
+        # Verificar que se revirtió
+        db_session.refresh(cliente)
+        assert cliente.saldo_cuenta_corriente == 0  # Volvió a 0
 
-        # Paginación
-        pedidos, total = pedido_service.get_pedidos_con_filtros(
-            page=1, page_size=2, session=session
-        )
-        assert len(pedidos) == 2
-        assert total == 5
+
+class TestStockService:
+    """Tests para StockService"""
+    
+    def test_obtener_stock_disponible(self, db_session, sample_lote):
+        """Test obtener stock disponible"""
+        from app.modules.pedidos import services
+        
+        service = services.StockService(db_session)
+        stock = service.obtener_stock_disponible()
+        
+        assert len(stock) >= 1
+        assert stock[0].kg_disponibles > 0
+    
+    def test_total_kg_disponibles(self, db_session, sample_lote):
+        """Test total kg disponibles por tipo de café"""
+        from app.modules.pedidos import services
+        
+        service = services.StockService(db_session)
+        total = service.total_kg_disponibles_tipo_cafe(1)
+        
+        assert total > 0

@@ -70,14 +70,9 @@ def get_db() -> Generator[Session, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# Importar modelos para que SQLAlchemy los conozca
+# Modelos y metadata
 # ---------------------------------------------------------------------------
-# Es CRUCIAL importar los modelos DESPUÉS de definir Base, para que se
-# registren en Base.metadata. Esto permite que create_all() y las migraciones
-# de Alembic detecten las tablas correctamente.
-from app.modules.inventario.models import (  # noqa: E402, F401
-    Blend,
-    BlendHasTipoDeCafe,
-    Lote,
-    TipoDeCafe,
-)
+# Los modelos NO se importan acá para evitar ciclos de importación: cada
+# módulo importa los suyos y ``alembic/env.py`` los carga todos antes de
+# generar migraciones. ``Base.metadata`` se completa a medida que los routers
+# y los tests importan sus modelos.

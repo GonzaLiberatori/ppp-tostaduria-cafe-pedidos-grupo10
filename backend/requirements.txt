@@ -40,7 +40,6 @@ opentelemetry-proto==1.45.1
 opentelemetry-sdk==1.45.1
 opentelemetry-semantic-conventions==0.66b1
 packaging==26.3
-passlib==1.7.4
 pluggy==1.7.0
 protobuf==7.36.2
 psycopg2-binary==2.9.13

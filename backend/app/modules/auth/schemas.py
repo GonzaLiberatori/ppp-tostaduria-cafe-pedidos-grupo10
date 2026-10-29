@@ -1,28 +1,39 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, field_validator
 from typing import Optional
 
 
-class UsuarioLogin(BaseModel):
-    username: str
-    password: str
-
-
-class UsuarioCreate(UsuarioLogin):
-    email: EmailStr
-    rol: str = "operador"
-
-
-class UsuarioRead(BaseModel):
-    id: int
-    username: str
-    email: str
-    rol: str
-    activo: bool
-
-    class Config:
-        from_attributes = True
+class TokenData(BaseModel):
+    email: Optional[str] = None
 
 
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    role: str
+
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        valid_roles = ['Administrador', 'Cajero', 'Operario', 'Cliente']
+        if v not in valid_roles:
+            raise ValueError(f"Rol inválido. Debe ser uno de: {valid_roles}")
+        return v
+
+
+class UserResponse(BaseModel):
+    id: int
+    correo: str
+    rol: str
+
+    class Config:
+        from_attributes = True
