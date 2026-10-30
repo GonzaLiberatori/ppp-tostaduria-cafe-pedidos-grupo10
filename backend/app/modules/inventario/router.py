@@ -1,196 +1,450 @@
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import select, func, case
+"""Rutas HTTP de ``TipoDeCafe`` y ``Blend``.
 
-from app.core.database import get_db
-from app.core.deps import get_current_user
-from app.modules.inventario.models import Stock, Bolsa
+Solo capa de presentación: valida la entrada con los schemas, devuelve los
+códigos de estado y pide la sesión con ``Depends``. No abre sesiones por su
+cuenta ni decide reglas de negocio; esas viven en ``services``.
+
+El ``id`` que identifica al registro va siempre por la ruta. Un solo router por
+módulo, con los prefijos escritos en cada ruta, para que quien lo incluya no
+tenga que acordarse de dos routers.
+"""
+
+from typing import NoReturn, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
+
+from app.core.deps import get_current_user, get_db
+from app.modules.auth.schemas import TokenData
+from app.modules.inventario import services
 from app.modules.inventario.schemas import (
-    StockCreate,
-    StockUpdate,
-    StockRead,
-    StockListRead,
-    BolsaCreate,
-    BolsaRead,
+    BlendCreate,
+    BlendRead,
+    BlendUpdate,
+    LoteCreate,
+    LoteEstadoUpdate,
+    LoteKgDisponiblesUpdate,
+    LoteKgRealesUpdate,
+    LoteRead,
+    LoteUpdate,
+    TipoDeCafeCreate,
+    TipoDeCafeRead,
+    TipoDeCafeUpdate,
 )
-from app.modules.auth.models import Usuario
-
-
-router = APIRouter(prefix="/inventario", tags=["Inventario"])
-
-
-@router.post(
-    "/",
-    response_model=StockRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Crear stock (café verde o tostado)",
+from app.modules.inventario.schemas_panel import (
+    BolsaPanelCreate,
+    BolsaPanelRead,
+    BolsaPanelUpdate,
+    StockPanelCreate,
+    StockPanelRead,
+    StockPanelUpdate,
 )
-def crear_stock(
-    dto: StockCreate,
+
+router = APIRouter(tags=["Inventario"])
+
+RUTA_TIPOS_DE_CAFE = "/tipos-de-cafe"
+RUTA_BLENDS = "/blends"
+RUTA_LOTES = "/lotes"
+
+
+def _a_codigo_http(exc: Exception) -> NoReturn:
+    """Traduce una excepción de dominio al código HTTP que le corresponde.
+
+    Cadena de `if / elif / else`: los casos son mutuamente excluyentes sobre el
+    mismo sujeto, que es el tipo de la excepción.
+    """
+    if isinstance(exc, services.TipoDeCafeNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.TipoDeCafeReferenciado):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    elif isinstance(exc, services.BlendNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.BlendReferenciado):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    elif isinstance(exc, services.NombreDeBlendEnUso):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    elif isinstance(exc, services.LoteNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.OrigenDeLoteNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.KgDisponiblesExcedeKgReales):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    elif isinstance(exc, services.FiltroLotesInvalido):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    elif isinstance(exc, services.StockItemInvalido):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    elif isinstance(exc, services.StockItemNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.TipoDeStockInmutable):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    elif isinstance(exc, services.BolsaNoEncontrada):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.BolsaNoPerteneceAlStock):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    raise exc
+
+
+# ---------------------------------------------------------------------------
+# TipoDeCafe
+# ---------------------------------------------------------------------------
+@router.post(RUTA_TIPOS_DE_CAFE, response_model=TipoDeCafeRead, status_code=status.HTTP_201_CREATED)
+def crear_tipo_de_cafe(datos: TipoDeCafeCreate, db: Session = Depends(get_db)) -> TipoDeCafeRead:
+    """Da de alta un tipo de café."""
+    return services.crear_tipo_de_cafe(db, datos)
+
+
+@router.get(RUTA_TIPOS_DE_CAFE, response_model=list[TipoDeCafeRead])
+def listar_tipos_de_cafe(db: Session = Depends(get_db)) -> list[TipoDeCafeRead]:
+    """Lista todos los tipos de café registrados."""
+    return services.listar_tipos_de_cafe(db)
+
+
+@router.get(f"{RUTA_TIPOS_DE_CAFE}/{{tipo_id}}", response_model=TipoDeCafeRead)
+def leer_tipo_de_cafe(tipo_id: int, db: Session = Depends(get_db)) -> TipoDeCafeRead:
+    """Devuelve el tipo de café con el ``id`` indicado."""
+    try:
+        return services.obtener_tipo_de_cafe(db, tipo_id)
+    except services.TipoDeCafeNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_TIPOS_DE_CAFE}/{{tipo_id}}", response_model=TipoDeCafeRead)
+def editar_tipo_de_cafe(
+    tipo_id: int,
+    datos: TipoDeCafeUpdate,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    stock = Stock(**dto.model_dump())
-    db.add(stock)
-    db.commit()
-    db.refresh(stock)
-    return stock
-
-
-@router.get(
-    "/",
-    response_model=List[StockListRead],
-    summary="Listar stock con totales",
-)
-def listar_stock(
-    tipo: Optional[str] = Query(None, pattern="^(verde|tostado)$"),
-    search: Optional[str] = Query(None, description="Buscar por variedad, origen, lote"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    # Subquery para agregados de bolsas
-    bolsas_agg = (
-        select(
-            Bolsa.stock_id,
-            func.count(Bolsa.id).label("total_bolsas"),
-            func.coalesce(func.sum(Bolsa.kilos), 0).label("total_kilos"),
-        )
-        .group_by(Bolsa.stock_id)
-        .subquery()
-    )
-    
-    stmt = (
-        select(
-            Stock,
-            bolsas_agg.c.total_bolsas,
-            bolsas_agg.c.total_kilos,
-        )
-        .outerjoin(bolsas_agg, Stock.id == bolsas_agg.c.stock_id)
-    )
-    
-    if tipo:
-        stmt = stmt.where(Stock.tipo == tipo)
-    if search:
-        search_term = f"%{search}%"
-        stmt = stmt.where(
-            Stock.variedad.ilike(search_term) |
-            Stock.origen.ilike(search_term) |
-            Stock.lote_principal.ilike(search_term)
-        )
-    
-    offset = (page - 1) * page_size
-    stmt = stmt.offset(offset).limit(page_size)
-    
-    results = db.execute(stmt).all()
-    
-    # Construir respuesta manualmente para incluir agregados
-    response = []
-    for stock, total_bolsas, total_kilos in results:
-        response.append(StockListRead(
-            id=stock.id,
-            tipo=stock.tipo,
-            variedad=stock.variedad,
-            origen=stock.origen,
-            precio_kg=stock.precio_kg,
-            lote_principal=stock.lote_principal,
-            total_bolsas=total_bolsas or 0,
-            total_kilos=total_kilos or 0,
-        ))
-    
-    return response
-
-
-@router.get(
-    "/{stock_id}",
-    response_model=StockRead,
-    summary="Obtener stock con bolsas",
-)
-def obtener_stock(
-    stock_id: int,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    stmt = select(Stock).options(selectinload(Stock.bolsas)).where(Stock.id == stock_id)
-    stock = db.execute(stmt).scalar_one_or_none()
-    
-    if not stock:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock no encontrado")
-    
-    return stock
-
-
-@router.patch(
-    "/{stock_id}",
-    response_model=StockRead,
-    summary="Actualizar stock",
-)
-def actualizar_stock(
-    stock_id: int,
-    dto: StockUpdate,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    stock = db.get(Stock, stock_id)
-    if not stock:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock no encontrado")
-    
-    update_data = dto.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(stock, field, value)
-    
-    db.commit()
-    db.refresh(stock)
-    return stock
+) -> TipoDeCafeRead:
+    """Modifica solo los atributos enviados con valor."""
+    try:
+        return services.actualizar_tipo_de_cafe(db, tipo_id, datos)
+    except services.TipoDeCafeNoEncontrado as exc:
+        _a_codigo_http(exc)
 
 
 @router.delete(
-    "/{stock_id}",
+    f"{RUTA_TIPOS_DE_CAFE}/{{tipo_id}}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Eliminar stock",
+    response_class=Response,
+)
+def eliminar_tipo_de_cafe(tipo_id: int, db: Session = Depends(get_db)) -> Response:
+    """Borra el tipo de café, salvo que otra entidad lo esté usando."""
+    try:
+        services.eliminar_tipo_de_cafe(db, tipo_id)
+    except (services.TipoDeCafeNoEncontrado, services.TipoDeCafeReferenciado) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Blend
+# ---------------------------------------------------------------------------
+@router.post(RUTA_BLENDS, response_model=BlendRead, status_code=status.HTTP_201_CREATED)
+def crear_blend(datos: BlendCreate, db: Session = Depends(get_db)) -> BlendRead:
+    """Da de alta un blend con su composición de tipos de café."""
+    try:
+        return services.crear_blend(db, datos)
+    except services.NombreDeBlendEnUso as exc:
+        _a_codigo_http(exc)
+
+
+@router.get(RUTA_BLENDS, response_model=list[BlendRead])
+def listar_blends(db: Session = Depends(get_db)) -> list[BlendRead]:
+    """Lista todos los blends registrados con sus composiciones."""
+    return services.listar_blends(db)
+
+
+@router.get(f"{RUTA_BLENDS}/{{blend_id}}", response_model=BlendRead)
+def leer_blend(blend_id: int, db: Session = Depends(get_db)) -> BlendRead:
+    """Devuelve el blend con el ``id`` indicado y su composición."""
+    try:
+        return services.obtener_blend(db, blend_id)
+    except services.BlendNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_BLENDS}/{{blend_id}}", response_model=BlendRead)
+def editar_blend(
+    blend_id: int,
+    datos: BlendUpdate,
+    db: Session = Depends(get_db),
+) -> BlendRead:
+    """Modifica solo los atributos enviados con valor y reemplaza la composición."""
+    try:
+        return services.actualizar_blend(db, blend_id, datos)
+    except (services.BlendNoEncontrado, services.NombreDeBlendEnUso) as exc:
+        _a_codigo_http(exc)
+
+
+@router.delete(
+    f"{RUTA_BLENDS}/{{blend_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def eliminar_blend(blend_id: int, db: Session = Depends(get_db)) -> Response:
+    """Borra el blend y su composición, salvo que otra entidad lo esté usando."""
+    try:
+        services.eliminar_blend(db, blend_id)
+    except (services.BlendNoEncontrado, services.BlendReferenciado) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Lote
+# ---------------------------------------------------------------------------
+@router.post(RUTA_LOTES, response_model=LoteRead, status_code=status.HTTP_201_CREATED)
+def crear_lote(datos: LoteCreate, db: Session = Depends(get_db)) -> LoteRead:
+    """Da de alta un lote. Los kilos disponibles se derivan de los reales."""
+    try:
+        return services.crear_lote(db, datos)
+    except services.OrigenDeLoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.get(RUTA_LOTES, response_model=list[LoteRead])
+def listar_lotes(
+    tipo_de_cafe_id: Optional[int] = None,
+    blend_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+) -> list[LoteRead]:
+    """Lista los lotes filtrados por tipo_de_cafe_id o blend_id (XOR)."""
+    try:
+        return services.listar_lotes(
+            db, tipo_de_cafe_id=tipo_de_cafe_id, blend_id=blend_id
+        )
+    except services.FiltroLotesInvalido as exc:
+        _a_codigo_http(exc)
+
+
+@router.get(f"{RUTA_LOTES}/{{lote_id}}", response_model=LoteRead)
+def leer_lote(lote_id: int, db: Session = Depends(get_db)) -> LoteRead:
+    """Devuelve el lote con el `id` indicado, con sus claves foráneas."""
+    try:
+        return services.obtener_lote(db, lote_id)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}", response_model=LoteRead)
+def editar_lote(
+    lote_id: int,
+    datos: LoteUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Modifica solo los atributos enviados con valor."""
+    try:
+        return services.actualizar_lote(db, lote_id, datos)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.delete(
+    f"{RUTA_LOTES}/{{lote_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def eliminar_lote(lote_id: int, db: Session = Depends(get_db)) -> Response:
+    """Borra únicamente el lote; lo que referencie permanece intacto."""
+    try:
+        services.eliminar_lote(db, lote_id)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}/kg-reales", response_model=LoteRead)
+def actualizar_kg_reales(
+    lote_id: int,
+    datos: LoteKgRealesUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Actualiza los kilos reales de un lote.
+
+    Propaga la diferencia a kg_disponibles si el nuevo valor es mayor.
+    """
+    try:
+        return services.actualizar_kg_reales(db, lote_id, datos)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}/kg-disponibles", response_model=LoteRead)
+def actualizar_kg_disponibles(
+    lote_id: int,
+    datos: LoteKgDisponiblesUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Actualiza los kilos disponibles de un lote.
+
+    Valida que kg_disponibles no exceda kg_reales.
+    """
+    try:
+        return services.actualizar_kg_disponibles(db, lote_id, datos)
+    except (services.LoteNoEncontrado, services.KgDisponiblesExcedeKgReales) as exc:
+        _a_codigo_http(exc)
+
+
+@router.patch(f"{RUTA_LOTES}/{{lote_id}}/estado", response_model=LoteRead)
+def actualizar_estado(
+    lote_id: int,
+    datos: LoteEstadoUpdate,
+    db: Session = Depends(get_db),
+) -> LoteRead:
+    """Actualiza el estado de un lote."""
+    try:
+        return services.actualizar_estado(db, lote_id, datos)
+    except services.LoteNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+
+# ---------------------------------------------------------------------------
+# Panel de stock: cafés con bolsas
+# ---------------------------------------------------------------------------
+RUTA_STOCK = "/stock"
+
+
+@router.get(RUTA_STOCK, response_model=list[StockPanelRead])
+def listar_stock(
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> list[StockPanelRead]:
+    """Lista los cafés con sus bolsas para el panel."""
+    return services.listar_stock(db)
+
+
+@router.get(f"{RUTA_STOCK}/{{stock_id}}", response_model=StockPanelRead)
+def obtener_stock(
+    stock_id: str,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> StockPanelRead:
+    """Devuelve un café del panel por su identificador plano."""
+    try:
+        return services.obtener_stock(db, stock_id)
+    except (services.StockItemInvalido, services.StockItemNoEncontrado) as exc:
+        _a_codigo_http(exc)
+
+
+@router.post(RUTA_STOCK, response_model=StockPanelRead, status_code=status.HTTP_201_CREATED)
+def crear_stock(
+    datos: StockPanelCreate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> StockPanelRead:
+    """Crea un café con sus bolsas iniciales."""
+    try:
+        return services.crear_stock(db, datos)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.patch(f"{RUTA_STOCK}/{{stock_id}}", response_model=StockPanelRead)
+def actualizar_stock(
+    stock_id: str,
+    datos: StockPanelUpdate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> StockPanelRead:
+    """Edita los datos de un café del panel."""
+    try:
+        return services.actualizar_stock(db, stock_id, datos)
+    except (
+        services.StockItemInvalido,
+        services.StockItemNoEncontrado,
+        services.TipoDeStockInmutable,
+    ) as exc:
+        _a_codigo_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete(
+    f"{RUTA_STOCK}/{{stock_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 def eliminar_stock(
-    stock_id: int,
+    stock_id: str,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    stock = db.get(Stock, stock_id)
-    if not stock:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock no encontrado")
-    
-    db.delete(stock)
-    db.commit()
+    _: TokenData = Depends(get_current_user),
+) -> Response:
+    """Elimina las bolsas de un café del panel."""
+    try:
+        services.eliminar_stock(db, stock_id)
+    except (services.StockItemInvalido, services.StockItemNoEncontrado) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# Bolsas endpoints
 @router.post(
-    "/{stock_id}/bolsas",
-    response_model=BolsaRead,
+    f"{RUTA_STOCK}/{{stock_id}}/bolsas",
+    response_model=BolsaPanelRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Agregar bolsa a stock",
 )
 def agregar_bolsa(
-    stock_id: int,
-    dto: BolsaCreate,
+    stock_id: str,
+    datos: BolsaPanelCreate,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    stock = db.get(Stock, stock_id)
-    if not stock:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock no encontrado")
-    
-    # Generar ID único para la bolsa
-    from uuid import uuid4
-    bolsa_id = f"b{uuid4().hex[:8]}"
-    
-    bolsa = Bolsa(
-        id=bolsa_id,
-        stock_id=stock_id,
-        **dto.model_dump()
-    )
-    db.add(bolsa)
-    db.commit()
-    db.refresh(bolsa)
-    return bolsa
+    _: TokenData = Depends(get_current_user),
+) -> BolsaPanelRead:
+    """Agrega una bolsa al café indicado."""
+    try:
+        return services.agregar_bolsa(db, stock_id, datos)
+    except (services.StockItemInvalido, services.StockItemNoEncontrado) as exc:
+        _a_codigo_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.patch(
+    f"{RUTA_STOCK}/{{stock_id}}/bolsas/{{bolsa_id}}",
+    response_model=BolsaPanelRead,
+)
+def actualizar_bolsa(
+    stock_id: str,
+    bolsa_id: int,
+    datos: BolsaPanelUpdate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> BolsaPanelRead:
+    """Edita el estado, los kilos o el código de una bolsa."""
+    try:
+        return services.actualizar_bolsa(db, stock_id, bolsa_id, datos)
+    except (
+        services.StockItemInvalido,
+        services.StockItemNoEncontrado,
+        services.BolsaNoEncontrada,
+        services.BolsaNoPerteneceAlStock,
+    ) as exc:
+        _a_codigo_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete(
+    f"{RUTA_STOCK}/{{stock_id}}/bolsas/{{bolsa_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def eliminar_bolsa(
+    stock_id: str,
+    bolsa_id: int,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> Response:
+    """Elimina una bolsa del café indicado."""
+    try:
+        services.eliminar_bolsa(db, stock_id, bolsa_id)
+    except (
+        services.StockItemInvalido,
+        services.StockItemNoEncontrado,
+        services.BolsaNoEncontrada,
+        services.BolsaNoPerteneceAlStock,
+    ) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

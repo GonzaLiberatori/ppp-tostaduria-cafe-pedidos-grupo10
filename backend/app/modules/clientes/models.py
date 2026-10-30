@@ -1,33 +1,85 @@
-from datetime import datetime
+"""Modelos del módulo de clientes, personas y cuentas corrientes."""
+
+import enum
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Numeric, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Enum as SQLEnum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+)
+from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
 
+class TipoCliente(str, enum.Enum):
+    """Tipo comercial del cliente."""
+
+    MAYORISTA = "Mayorista"
+    CONSUMIDOR_FINAL = "Consumidor Final"
+
+
+class Persona(Base):
+    """Datos personales compartidos por clientes y empleados."""
+
+    __tablename__ = "persona"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nombre = Column(String(45), nullable=False)
+    apellido = Column(String(45), nullable=False)
+    CUIT = Column(String(15), unique=True, nullable=True)
+    email = Column(String(100), unique=True, nullable=True)
+    telefono = Column(String(25), unique=True, nullable=True)
+    cuenta_id = Column(Integer, ForeignKey("cuenta.id"), nullable=True)
+
+    cuenta = relationship("Cuenta", back_populates="persona")
+    cliente = relationship("Cliente", back_populates="persona", uselist=False)
+    empleado = relationship("Empleado", back_populates="persona", uselist=False)
+
+
 class Cliente(Base):
-    __tablename__ = "clientes"
+    """Cliente con su cuenta corriente y límite de crédito."""
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    nombre: Mapped[str] = mapped_column(String(100), nullable=False)
-    tipo: Mapped[str] = mapped_column(String(10), nullable=False)  # B2B, B2C
-    kilos_comprados: Mapped[int] = mapped_column(default=0)
-    tiene_deuda: Mapped[bool] = mapped_column(default=False)
-    monto_deuda: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    telefono: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    direccion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __tablename__ = "cliente"
 
-    # Relationships
-    pedidos: Mapped[List["Pedido"]] = relationship(
-        "Pedido",
-        back_populates="cliente",
-        lazy="selectin",
-    )
+    persona_id = Column(Integer, ForeignKey("persona.id"), primary_key=True)
+    tipo = Column(SQLEnum(TipoCliente), nullable=False)
+    direccion_de_entrega = Column(String(100), nullable=True)
+    fecha_alta = Column(DateTime, nullable=True, default=datetime.utcnow)
 
-    def __repr__(self) -> str:
-        return f"<Cliente(id={self.id}, nombre={self.nombre}, tipo={self.tipo})>"
+    # Cuenta corriente
+    saldo_cuenta_corriente = Column(Numeric(12, 2), nullable=False, default=0)
+    limite_credito = Column(Numeric(12, 2), nullable=True)
+
+    persona = relationship("Persona", back_populates="cliente")
+    pedidos = relationship("Pedido", back_populates="cliente")
+
+    @property
+    def es_b2b(self) -> bool:
+        """Indica si el cliente es mayorista (B2B)."""
+        return self.tipo == TipoCliente.MAYORISTA
+
+
+class Empleado(Base):
+    """Empleado que puede registrar pedidos."""
+
+    __tablename__ = "empleado"
+
+    persona_id = Column(Integer, ForeignKey("persona.id"), primary_key=True)
+    fecha_de_contratacion = Column(Date, nullable=False)
+    fecha_de_nacimiento = Column(Date, nullable=False)
+    salario = Column(Numeric(10, 2), nullable=False)
+
+    persona = relationship("Persona", back_populates="empleado")
+    pedidos = relationship("Pedido", back_populates="empleado")
+
+
+__all__ = ["TipoCliente", "Persona", "Cliente", "Empleado"]

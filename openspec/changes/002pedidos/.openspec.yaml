@@ -1,0 +1,16 @@
+schema: spec-driven
+change: 002pedidos
+created: "2026-10-24T16:36:00-03:00"
+artifacts:
+  - id: proposal
+    path: proposal.md
+    status: done
+  - id: design
+    path: design.md
+    status: done
+  - id: specs
+    path: specs/pedidos/spec.md
+    status: done
+  - id: tasks
+    path: tasks.md
+    status: in_progress

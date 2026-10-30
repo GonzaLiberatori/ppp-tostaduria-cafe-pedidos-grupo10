@@ -1,127 +1,88 @@
-from typing import List, Optional
-from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+"""Rutas HTTP del módulo de gastos."""
+
+from typing import NoReturn
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
 
-from app.core.database import get_db
-from app.core.deps import get_current_user
-from app.modules.gastos.models import Gasto
+from app.core.deps import get_current_user, get_db
+from app.modules.auth.schemas import TokenData
+from app.modules.gastos import services
 from app.modules.gastos.schemas import (
-    GastoCreate,
-    GastoUpdate,
-    GastoRead,
+    GastoPanelCreate,
+    GastoPanelRead,
+    GastoPanelUpdate,
 )
-from app.modules.auth.models import Usuario
-
 
 router = APIRouter(prefix="/gastos", tags=["Gastos"])
 
 
-@router.post(
-    "/",
-    response_model=GastoRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Crear gasto",
-)
-def crear_gasto(
-    dto: GastoCreate,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    gasto = Gasto(**dto.model_dump())
-    db.add(gasto)
-    db.commit()
-    db.refresh(gasto)
-    return gasto
+def _a_codigo_http(exc: Exception) -> NoReturn:
+    if isinstance(exc, services.GastoNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    raise exc
 
 
-@router.get(
-    "/",
-    response_model=List[GastoRead],
-    summary="Listar gastos con filtros",
-)
+@router.get("/", response_model=list[GastoPanelRead])
 def listar_gastos(
-    categoria: Optional[str] = Query(None),
-    fecha_desde: Optional[date] = Query(None),
-    fecha_hasta: Optional[date] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    stmt = select(Gasto)
-    
-    if categoria:
-        stmt = stmt.where(Gasto.categoria == categoria)
-    if fecha_desde:
-        stmt = stmt.where(func.date(Gasto.fecha) >= fecha_desde)
-    if fecha_hasta:
-        stmt = stmt.where(func.date(Gasto.fecha) <= fecha_hasta)
-    
-    # Ordenar por fecha descendente (más recientes primero)
-    stmt = stmt.order_by(Gasto.fecha.desc())
-    
-    offset = (page - 1) * page_size
-    stmt = stmt.offset(offset).limit(page_size)
-    
-    gastos = db.execute(stmt).scalars().all()
-    return gastos
+    _: TokenData = Depends(get_current_user),
+) -> list[GastoPanelRead]:
+    """Lista los gastos del panel."""
+    return services.listar_gastos(db)
 
 
-@router.get(
-    "/{gasto_id}",
-    response_model=GastoRead,
-    summary="Obtener gasto por ID",
-)
+@router.get("/{gasto_id}", response_model=GastoPanelRead)
 def obtener_gasto(
     gasto_id: int,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    gasto = db.get(Gasto, gasto_id)
-    if not gasto:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gasto no encontrado")
-    return gasto
+    _: TokenData = Depends(get_current_user),
+) -> GastoPanelRead:
+    """Devuelve un gasto por id."""
+    try:
+        return services.obtener_gasto(db, gasto_id)
+    except services.GastoNoEncontrado as exc:
+        _a_codigo_http(exc)
 
 
-@router.patch(
-    "/{gasto_id}",
-    response_model=GastoRead,
-    summary="Actualizar gasto",
-)
+@router.post("/", response_model=GastoPanelRead, status_code=status.HTTP_201_CREATED)
+def crear_gasto(
+    datos: GastoPanelCreate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> GastoPanelRead:
+    """Registra un gasto."""
+    return services.crear_gasto(db, datos)
+
+
+@router.patch("/{gasto_id}", response_model=GastoPanelRead)
 def actualizar_gasto(
     gasto_id: int,
-    dto: GastoUpdate,
+    datos: GastoPanelUpdate,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    gasto = db.get(Gasto, gasto_id)
-    if not gasto:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gasto no encontrado")
-    
-    update_data = dto.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(gasto, field, value)
-    
-    db.commit()
-    db.refresh(gasto)
-    return gasto
+    _: TokenData = Depends(get_current_user),
+) -> GastoPanelRead:
+    """Edita los campos enviados de un gasto."""
+    try:
+        return services.actualizar_gasto(db, gasto_id, datos)
+    except services.GastoNoEncontrado as exc:
+        _a_codigo_http(exc)
 
 
 @router.delete(
     "/{gasto_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Eliminar gasto",
+    response_class=Response,
 )
 def eliminar_gasto(
     gasto_id: int,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user),
-):
-    gasto = db.get(Gasto, gasto_id)
-    if not gasto:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gasto no encontrado")
-    
-    db.delete(gasto)
-    db.commit()
+    _: TokenData = Depends(get_current_user),
+) -> Response:
+    """Elimina un gasto."""
+    try:
+        services.eliminar_gasto(db, gasto_id)
+    except services.GastoNoEncontrado as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

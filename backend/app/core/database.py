@@ -1,50 +1,67 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from sqlalchemy.pool import QueuePool, StaticPool
+"""Configuración de conexión a base de datos.
+
+Crea el engine de SQLAlchemy y la fábrica de sesiones sobre SQLite, el único
+motor soportado por el proyecto. Los modelos se importan desde los módulos
+(cada uno registra los suyos en ``Base.metadata``), y ``alembic/env.py`` los
+carga todos antes de generar migraciones.
+"""
+
+from typing import Any, Generator
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 
 
-def get_connect_args(database_url: str) -> dict:
-    """Get database-specific connection arguments."""
-    if database_url.startswith("sqlite"):
-        return {"check_same_thread": False}
-    return {"charset": "utf8mb4"}
+def es_sqlite_en_memoria(url: str) -> bool:
+    """Indica si la URL corresponde a una base SQLite en memoria."""
+    return ":memory:" in url
 
 
-def get_pool_class(database_url: str):
-    """Get appropriate pool class for database."""
-    if database_url.startswith("sqlite"):
-        return StaticPool
-    return QueuePool
+def configurar_sqlite(dbapi_connection: Any, _connection_record: Any) -> None:
+    """Activa las claves foráneas en cada conexión.
+
+    SQLite ignora las restricciones de clave foránea por defecto; sin este
+    PRAGMA las relaciones entre tablas no se validan.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
-def get_engine_kwargs(database_url: str) -> dict:
-    """Get engine kwargs based on database type."""
-    kwargs = {
-        "pool_pre_ping": True,
-        "poolclass": get_pool_class(database_url),
-        "connect_args": get_connect_args(database_url),
-    }
-    if not database_url.startswith("sqlite"):
-        kwargs["pool_size"] = 5
-        kwargs["max_overflow"] = 10
-    return kwargs
+opciones_engine: dict[str, Any] = {
+    # FastAPI atiende requests en varios hilos; SQLite no permite compartir
+    # conexiones entre hilos salvo que se desactive esta comprobación.
+    "connect_args": {"check_same_thread": False},
+    "echo": settings.DEBUG,
+}
 
+if es_sqlite_en_memoria(settings.DATABASE_URL):
+    # Una base en memoria existe mientras viva su conexión: StaticPool mantiene
+    # una única conexión compartida para todos los requests y tests.
+    opciones_engine["poolclass"] = StaticPool
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    **get_engine_kwargs(settings.DATABASE_URL),
-)
+engine = create_engine(settings.DATABASE_URL, **opciones_engine)
+
+event.listen(engine, "connect", configurar_sqlite)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 class Base(DeclarativeBase):
+    """Clase base para todos los modelos SQLAlchemy."""
+
     pass
 
 
-def get_db():
+def get_db() -> Generator[Session, None, None]:
+    """Provee una sesión de base de datos para cada request.
+
+    La sesión se crea al inicio del request y se cierra automáticamente al
+    finalizar, garantizando que no queden conexiones abiertas.
+    """
     db = SessionLocal()
     try:
         yield db

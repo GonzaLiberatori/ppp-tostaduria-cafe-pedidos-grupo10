@@ -1,97 +1,335 @@
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, List
-from enum import Enum as PyEnum
-
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class EstadoPedidoEnum(str, PyEnum):
-    PENDIENTE = "Pendiente"
-    LISTO = "Listo"
-    ENTREGADO = "Entregado"
+class EstadoPedidoEnum(str):
+    PENDIENTE = "PENDIENTE"
+    LISTO = "LISTO"
+    ENTREGADO = "ENTREGADO"
 
 
-class PedidoItemBase(BaseModel):
-    stock_id: int = Field(..., gt=0, description="ID del stock (café tostado)")
-    variedad: str = Field(..., min_length=1, max_length=100, description="Nombre de la variedad")
-    kilos: Decimal = Field(..., gt=0, max_digits=10, decimal_places=3, description="Kilos solicitados")
-    precio_kg: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2, description="Precio por kilo")
-
-    @field_validator("kilos", "precio_kg", mode="before")
-    @classmethod
-    def convert_to_decimal(cls, v):
-        if isinstance(v, (int, float, str)):
-            return Decimal(str(v))
-        return v
+class TipoDeCafeBase(BaseModel):
+    organico: bool
+    precio_por_kg_verde: Decimal
+    variedad: str
+    region: str
+    pais: str
 
 
-class PedidoItemCreate(PedidoItemBase):
+class TipoDeCafeCreate(TipoDeCafeBase):
     pass
 
 
-class PedidoItemRead(PedidoItemBase):
+class TipoDeCafeResponse(TipoDeCafeBase):
     id: int
-    pedido_id: int
-    subtotal: Decimal
 
     model_config = ConfigDict(from_attributes=True)
 
 
+class BlendBase(BaseModel):
+    nombre: str
+    precio_por_kg_verde: Decimal
+    descripcion: str
+
+
+class BlendCreate(BlendBase):
+    id: int
+
+
+class BlendResponse(BlendBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BlendHasTipoDeCafeBase(BaseModel):
+    blend_id: int
+    tipo_de_cafe_id: int
+    porcentaje: Decimal
+
+
+class BlendHasTipoDeCafeCreate(BlendHasTipoDeCafeBase):
+    pass
+
+
+class BlendHasTipoDeCafeResponse(BlendHasTipoDeCafeBase):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MoliendaBase(BaseModel):
+    tipo: str
+    valor_agregado_por_kg: Decimal = Decimal("0")
+
+
+class MoliendaCreate(MoliendaBase):
+    pass
+
+
+class MoliendaResponse(MoliendaBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PerfilDeTostadoBase(BaseModel):
+    variante: str
+    valor_agregado_por_kg: Decimal = Decimal("0")
+
+
+class PerfilDeTostadoCreate(PerfilDeTostadoBase):
+    pass
+
+
+class PerfilDeTostadoResponse(PerfilDeTostadoBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OrdenTuesteBase(BaseModel):
+    fecha_tueste: datetime
+    kg_gastados: Decimal
+    kg_obtenidos: Decimal
+    perfil_de_tostado_id: int
+
+
+class OrdenTuesteCreate(OrdenTuesteBase):
+    id: int
+
+
+class OrdenTuesteResponse(OrdenTuesteBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LoteBase(BaseModel):
+    tipo: str  # VERDE, TOSTADO
+    estado: str  # CERRADO, ABIERTO
+    fecha_vencimiento: datetime
+    humedad: Decimal
+    kg_disponibles: Decimal
+    kg_reales: Decimal
+    ubicacion_fisica: str
+    observaciones: Optional[str] = None
+    tipo_de_cafe_id: Optional[int] = None
+    blend_id: Optional[int] = None
+    orden_tueste_id: Optional[int] = None
+
+
+class LoteCreate(LoteBase):
+    id: int
+
+
+class LoteResponse(LoteBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PersonaBase(BaseModel):
+    nombre: str
+    apellido: str
+    CUIT: Optional[str] = None
+    telefono: str
+
+
+class PersonaCreate(PersonaBase):
+    cuenta_id: Optional[int] = None
+
+
+class PersonaResponse(PersonaBase):
+    id: int
+    cuenta_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClienteBase(BaseModel):
+    tipo: str  # Mayorista, Consumidor Final
+    direccion_de_entrega: Optional[str] = None
+
+
+class ClienteCreate(ClienteBase):
+    persona_id: int
+
+
+class ClienteResponse(ClienteBase):
+    persona_id: int
+    persona: Optional["PersonaResponse"] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmpleadoBase(BaseModel):
+    fecha_de_contratacion: datetime
+    fecha_de_nacimiento: datetime
+    salario: Decimal
+
+
+class EmpleadoCreate(EmpleadoBase):
+    persona_id: int
+
+
+class EmpleadoResponse(EmpleadoBase):
+    persona_id: int
+    persona: Optional["PersonaResponse"] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DetallePedidoBase(BaseModel):
+    cantidad_kg: Decimal
+    subtotal: Decimal
+    tipo_de_cafe_id: Optional[int] = None
+    blend_id: Optional[int] = None
+    molienda_id: Optional[int] = None
+    perfil_de_tostado_id: Optional[int] = None
+
+
+class DetallePedidoResponse(DetallePedidoBase):
+    id: int
+    pedido_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DetallePedidoCreate(DetallePedidoBase):
+    subtotal: Optional[Decimal] = None
+
+
 class PedidoBase(BaseModel):
-    cliente_id: int = Field(..., gt=0, description="ID del cliente")
-    medio_contacto: str = Field(default="WhatsApp", max_length=50)
-    observaciones: Optional[str] = Field(default=None)
-    estado: EstadoPedidoEnum = Field(default=EstadoPedidoEnum.PENDIENTE)
+    fecha: datetime
+    metodo_de_despacho: str  # Retiro en local, Envio propio, Transporte externo
+    estado: str  # PENDIENTE, LISTO, ENTREGADO
+    total: Decimal
+    cliente_persona_id: int
+    empleado_persona_id: Optional[int] = None
 
 
-class PedidoCreate(PedidoBase):
-    items: List[PedidoItemCreate] = Field(..., min_length=1, description="Al menos un item requerido")
+class PedidoCreate(BaseModel):
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str = "PENDIENTE"
+    total: Optional[Decimal] = None
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: Optional[int] = None
+    detalles: List[DetallePedidoCreate]
 
-    @field_validator("items")
+    @field_validator('detalles')
     @classmethod
-    def validate_items_not_empty(cls, v):
+    def validar_detalles_no_vacios(cls, v):
         if not v or len(v) == 0:
-            raise ValueError("Debe haber al menos un item en el pedido")
+            raise ValueError("El pedido debe tener al menos un item")
         return v
 
 
 class PedidoUpdate(BaseModel):
-    medio_contacto: Optional[str] = Field(default=None, max_length=50)
-    observaciones: Optional[str] = Field(default=None)
-    estado: Optional[EstadoPedidoEnum] = Field(default=None)
+    estado: Optional[str] = None
+    metodo_de_despacho: Optional[str] = None
+    observaciones: Optional[str] = None
+    medio_contacto: Optional[str] = None
+
+    @field_validator('estado')
+    @classmethod
+    def validar_estado(cls, v):
+        if v is not None and v not in ["PENDIENTE", "LISTO", "ENTREGADO"]:
+            raise ValueError("Estado inválido. Debe ser PENDIENTE, LISTO o ENTREGADO")
+        return v
 
 
-class PedidoRead(BaseModel):
+class PedidoUpdateConDetalles(BaseModel):
+    estado: Optional[str] = None
+    metodo_de_despacho: Optional[str] = None
+    observaciones: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    detalles: List[DetallePedidoCreate]
+
+
+class PedidoDetailRead(BaseModel):
     id: int
-    cliente_id: int
     fecha: datetime
-    estado: EstadoPedidoEnum
-    medio_contacto: str
-    observaciones: Optional[str]
+    metodo_de_despacho: str
+    estado: str
     total: Decimal
-    idempotency_key: str
-    creado_en: datetime
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: Optional[int] = None
+    detalles: List[DetallePedidoResponse] = []
+    cliente: Optional["ClienteResponse"] = None
+    historial_estados: List["PedidoEstadoHistorialRead"] = []
 
     model_config = ConfigDict(from_attributes=True)
-
-
-class PedidoDetailRead(PedidoRead):
-    items: List[PedidoItemRead] = []
-    cliente_nombre: Optional[str] = None
-    cliente_tipo: Optional[str] = None
 
 
 class PedidoListRead(BaseModel):
     id: int
     fecha: datetime
-    cliente_id: int
-    cliente_nombre: str
-    estado: EstadoPedidoEnum
-    items_count: int
-    kilos_totales: Decimal
+    metodo_de_despacho: str
+    estado: str
     total: Decimal
-    medio_contacto: str
+    cliente_persona_id: int
+    items_count: int = 0
+    kilos_totales: Decimal = Decimal("0")
+    medio_contacto: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoResponse(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: Optional[int] = None
+    detalles: List["DetallePedidoResponse"] = []
+    cliente: Optional["ClienteResponse"] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PagoBase(BaseModel):
+    metodo_de_pago: str  # EFECTIVO, CREDITO, DEBITO, TRANSFERENCIA, MERCADO_PAGO, CHEQUE, OTRO
+    porcentaje_pagado: Decimal
+    moneda: str  # ARS, USD, EUR, BRL
+    aclaracion: Optional[str] = None
+
+
+class PagoCreate(PagoBase):
+    pass
+
+
+class PagoResponse(PagoBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VentaBase(BaseModel):
+    fecha: datetime
+    facturacion: str  # Factura A, Consumidor Final, Ticket, No requiere
+    pedido_id: int
+    pago_id: int
+
+
+class VentaCreate(VentaBase):
+    id: int
+
+
+class VentaResponse(VentaBase):
+    id: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -99,9 +337,111 @@ class PedidoListRead(BaseModel):
 class PedidoEstadoHistorialRead(BaseModel):
     id: int
     pedido_id: int
-    estado_anterior: Optional[EstadoPedidoEnum]
-    estado_nuevo: EstadoPedidoEnum
-    usuario_id: Optional[int]
+    estado_anterior: Optional[str] = None
+    estado_nuevo: str
+    usuario_id: Optional[int] = None
     timestamp: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoDetailRead(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    idempotency_key: Optional[str] = None
+    medio_contacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_persona_id: int
+    empleado_persona_id: Optional[int] = None
+    detalles: List["DetallePedidoResponse"] = []
+    cliente: Optional["ClienteResponse"] = None
+    historial_estados: List["PedidoEstadoHistorialRead"] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PedidoListRead(BaseModel):
+    id: int
+    fecha: datetime
+    metodo_de_despacho: str
+    estado: str
+    total: Decimal
+    cliente_persona_id: int
+    items_count: int = 0
+    kilos_totales: Decimal = Decimal("0")
+    medio_contacto: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Resolve forward references
+ClienteResponse.model_rebuild()
+EmpleadoResponse.model_rebuild()
+PedidoCreate.model_rebuild()
+PedidoResponse.model_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Contratos planos del panel de pedidos
+# ---------------------------------------------------------------------------
+class PedidoPanelItem(BaseModel):
+    """Ítem enviado por el panel. El precio lo calcula el backend."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    stockId: str
+    kilos: Decimal = Field(gt=0)
+    precioKg: Optional[Decimal] = None
+    variedad: Optional[str] = None
+
+
+class PedidoPanelCreate(BaseModel):
+    """Alta de pedido desde el panel."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    clienteId: str
+    estado: str = "Pendiente"
+    medioContacto: str = "WhatsApp"
+    observaciones: str = ""
+    items: List[PedidoPanelItem] = Field(min_length=1)
+    total: Optional[Decimal] = None
+
+
+class PedidoPanelUpdate(BaseModel):
+    """Edición parcial de pedido desde el panel."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    clienteId: Optional[str] = None
+    estado: Optional[str] = None
+    medioContacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    items: Optional[List[PedidoPanelItem]] = None
+
+
+class PedidoPanelItemRead(BaseModel):
+    """Ítem de pedido tal como lo consume el panel."""
+
+    stockId: str
+    variedad: str
+    kilos: float
+    precioKg: float
+    subtotal: float
+
+
+class PedidoPanelRead(BaseModel):
+    """Pedido tal como lo consume el panel."""
+
+    id: str
+    fecha: datetime
+    estado: str
+    clienteId: str
+    clienteNombre: str
+    items: List[PedidoPanelItemRead]
+    medioContacto: str = ""
+    observaciones: str = ""
+    total: float

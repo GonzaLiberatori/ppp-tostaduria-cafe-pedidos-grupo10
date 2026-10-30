@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useData } from '../context/DataContext'
+import { useToast } from '../hooks/useToast.jsx'
 import { TIPOS_CLIENTE } from '../data/constants'
 import ClienteForm from '../components/forms/ClienteForm'
 import Table from '../components/ui/Table'
@@ -19,6 +20,7 @@ export default function Clientes() {
     getPedidosByCliente,
     getClientesConDeuda 
   } = useData()
+  const { success, error: toastError } = useToast()
 
   const [showForm, setShowForm] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
@@ -44,14 +46,20 @@ export default function Clientes() {
     })
   }, [clientes, filters])
 
-  const handleSubmit = (data, id) => {
-    if (id) {
-      updateCliente(id, data)
-    } else {
-      addCliente(data)
+  const handleSubmit = async (data, id) => {
+    try {
+      if (id) {
+        await updateCliente(id, data)
+        success('Cliente actualizado')
+      } else {
+        await addCliente(data)
+        success('Cliente creado')
+      }
+      setShowForm(false)
+      setEditingItem(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo guardar el cliente')
     }
-    setShowForm(false)
-    setEditingItem(null)
   }
 
   const handleEdit = (item) => {
@@ -67,10 +75,15 @@ export default function Clientes() {
     setDeleteConfirm(id)
   }
 
-  const confirmDelete = () => {
-    if (deleteConfirm) {
-      deleteCliente(deleteConfirm)
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return
+
+    try {
+      await deleteCliente(deleteConfirm)
+      success('Cliente eliminado')
       setDeleteConfirm(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo eliminar el cliente')
     }
   }
 

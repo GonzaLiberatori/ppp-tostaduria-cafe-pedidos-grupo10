@@ -56,6 +56,23 @@ export const ESTADO_BOLSA_COLORS = {
   abierta: 'badge-warning',
 }
 
+export const MEDIOS_PAGO = [
+  { value: 'transferencia', label: 'Transferencia bancaria' },
+  { value: 'tarjeta', label: 'Tarjeta de crédito/débito' },
+  { value: 'efectivo', label: 'Efectivo' },
+]
+
+export const FRECUENCIA_SUSCRIPCION = [
+  { value: 'semanal', label: 'Semanal' },
+  { value: 'mensual', label: 'Mensual' },
+]
+
+export const ESTADO_PEDIDO_CLIENTE = [
+  { value: 'Pendiente', label: 'Pendiente', color: 'warning' },
+  { value: 'Listo', label: 'Listo para retirar', color: 'info' },
+  { value: 'Entregado', label: 'Entregado', color: 'success' },
+]
+
 export const MESES_ES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'

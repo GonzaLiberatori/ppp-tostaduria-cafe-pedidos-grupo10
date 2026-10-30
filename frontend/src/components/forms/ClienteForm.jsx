@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { TIPOS_CLIENTE } from '../../data/constants'
-import Button from '../ui/Button'
 import Input from '../ui/Input'
 import Select from '../ui/Select'
 import Modal from '../ui/Modal'
@@ -12,7 +11,7 @@ export default function ClienteForm({ isOpen, onClose, initialData, onSubmit }) 
     telefono: '',
     email: '',
     direccion: '',
-    kilosComprados: '',
+    limiteCredito: '',
     tieneDeuda: false,
     montoDeuda: '',
   })
@@ -27,11 +26,10 @@ export default function ClienteForm({ isOpen, onClose, initialData, onSubmit }) 
         telefono: initialData.telefono || '',
         email: initialData.email || '',
         direccion: initialData.direccion || '',
-        kilosComprados: initialData.kilosComprados || '',
+        limiteCredito: initialData.limiteCredito ?? '',
         tieneDeuda: initialData.tieneDeuda || false,
         montoDeuda: initialData.montoDeuda || '',
       })
-      setErrors({})
     } else {
       setFormData({
         nombre: '',
@@ -39,49 +37,75 @@ export default function ClienteForm({ isOpen, onClose, initialData, onSubmit }) 
         telefono: '',
         email: '',
         direccion: '',
-        kilosComprados: '',
+        limiteCredito: '',
         tieneDeuda: false,
         montoDeuda: '',
       })
-      setErrors({})
     }
+    setErrors({})
   }, [initialData, isOpen])
 
   const validate = () => {
     const newErrors = {}
+
     if (!formData.nombre.trim()) newErrors.nombre = 'El nombre es obligatorio'
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'Email inválido'
     }
+    if (formData.limiteCredito && parseFloat(formData.limiteCredito) < 0) {
+      newErrors.limiteCredito = 'El límite no puede ser negativo'
+    }
     if (formData.tieneDeuda && (!formData.montoDeuda || parseFloat(formData.montoDeuda) <= 0)) {
       newErrors.montoDeuda = 'El monto de deuda debe ser mayor a 0'
     }
+
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!validate()) return
-    
+
     setSubmitting(true)
+
     const data = {
       nombre: formData.nombre.trim(),
       tipo: formData.tipo,
-      telefono: formData.telefono.trim(),
-      email: formData.email.trim(),
-      direccion: formData.direccion.trim(),
-      kilosComprados: parseFloat(formData.kilosComprados) || 0,
+      telefono: formData.telefono.trim() || null,
+      email: formData.email.trim() || null,
+      direccion: formData.direccion.trim() || null,
       tieneDeuda: formData.tieneDeuda,
-      montoDeuda: parseFloat(formData.montoDeuda) || 0,
+      montoDeuda: formData.tieneDeuda ? parseFloat(formData.montoDeuda) : 0,
     }
-    onSubmit(data, initialData?.id)
-    setSubmitting(false)
+
+    if (formData.limiteCredito !== '') {
+      data.limiteCredito = parseFloat(formData.limiteCredito)
+    }
+
+    try {
+      await onSubmit(data, initialData?.id)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target
-    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }))
+
+    setFormData(prev => {
+      const siguiente = {
+        ...prev,
+        [name]: type === 'checkbox' ? checked : value,
+      }
+
+      if (name === 'tieneDeuda' && !checked) {
+        siguiente.montoDeuda = ''
+      }
+
+      return siguiente
+    })
+
     if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }))
   }
 
@@ -157,14 +181,15 @@ export default function ClienteForm({ isOpen, onClose, initialData, onSubmit }) 
 
         <div className="form-row">
           <Input
-            label="Kilos comprados totales"
-            name="kilosComprados"
+            label="Límite de crédito"
+            name="limiteCredito"
             type="number"
             step="0.01"
             min="0"
-            value={formData.kilosComprados}
+            value={formData.limiteCredito}
             onChange={handleChange}
             placeholder="0.00"
+            error={errors.limiteCredito}
           />
           {formData.tieneDeuda && (
             <Input

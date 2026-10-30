@@ -1,14 +1,40 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { Eye, EyeOff, Coffee, User, Lock } from 'lucide-react'
+import { Eye, EyeOff, Coffee, Mail, Lock } from 'lucide-react'
 import Button from '../components/ui/Button'
-import Input from '../components/ui/Input'
+
+const CUENTAS_DEMO = [
+  {
+    email: 'admin@cafedefinca.com',
+    password: 'admin123',
+    etiqueta: 'Administrador',
+    detalle: 'Acceso total',
+  },
+  {
+    email: 'operario@cafedefinca.com',
+    password: 'operario123',
+    etiqueta: 'Operario',
+    detalle: 'Stock y producción',
+  },
+  {
+    email: 'cajero@cafedefinca.com',
+    password: 'cajero123',
+    etiqueta: 'Cajero',
+    detalle: 'Clientes y pedidos',
+  },
+  {
+    email: 'cliente@cafedefinca.com',
+    password: 'cliente123',
+    etiqueta: 'Cliente',
+    detalle: 'Portal de cliente',
+  },
+]
 
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
@@ -18,14 +44,21 @@ export default function Login() {
     e.preventDefault()
     setError('')
     setLoading(true)
-    
-    const result = login(username, password)
+
+    const result = await login(email, password)
     if (result.success) {
-      navigate('/')
+      navigate(result.user.role === 'cliente' ? '/cliente' : '/', { replace: true })
     } else {
       setError(result.error)
     }
+
     setLoading(false)
+  }
+
+  const completarCredenciales = (cuenta) => {
+    setEmail(cuenta.email)
+    setPassword(cuenta.password)
+    setError('')
   }
 
   return (
@@ -59,32 +92,34 @@ export default function Login() {
             )}
 
             <div className="relative">
-              <label className="label text-coffee-100">Usuario</label>
+              <label className="label text-coffee-100" htmlFor="login-email">Correo</label>
               <div className="relative">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-coffee-300" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-coffee-300" />
                 <input
-                  type="text"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
+                  id="login-email"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
                   className="input pl-10 bg-white/5 border-white/20 text-white placeholder-coffee-300 focus:ring-coffee-500/30 focus:border-coffee-500"
-                  placeholder="admin, empleado, vendedor"
+                  placeholder="usuario@cafedefinca.com"
                   required
-                  autoComplete="username"
+                  autoComplete="email"
                   disabled={loading}
                 />
               </div>
             </div>
 
             <div className="relative">
-              <label className="label text-coffee-100">Contraseña</label>
+              <label className="label text-coffee-100" htmlFor="login-password">Contraseña</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-coffee-300" />
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   className="input pl-10 pr-12 bg-white/5 border-white/20 text-white placeholder-coffee-300 focus:ring-coffee-500/30 focus:border-coffee-500"
-                  placeholder="111"
+                  placeholder="Contraseña"
                   required
                   autoComplete="current-password"
                   disabled={loading}
@@ -106,16 +141,20 @@ export default function Login() {
           </form>
 
           <div className="mt-6 pt-6 border-t border-white/10">
-            <p className="text-xs text-coffee-300/60 text-center mb-3">Usuarios de prueba (contraseña: 111)</p>
-            <div className="grid gap-2">
-              {['admin', 'empleado', 'vendedor'].map(role => (
+            <p className="text-xs text-coffee-300/60 text-center mb-3">
+              Cuentas de demostración
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {CUENTAS_DEMO.map(cuenta => (
                 <button
-                  key={role}
+                  key={cuenta.email}
                   type="button"
-                  onClick={() => { setUsername(role); setPassword('111'); }}
+                  onClick={() => completarCredenciales(cuenta)}
                   className="text-left px-3 py-2 text-sm rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-colors text-coffee-100"
                 >
-                  <span className="font-medium">{role}</span> <span className="text-coffee-300/60 ml-2">({role === 'admin' ? 'Acceso total' : role === 'empleado' ? 'Sin contabilidad' : 'Solo pedidos'})</span>
+                  <span className="font-medium block">{cuenta.etiqueta}</span>
+                  <span className="text-coffee-300/60 text-xs block truncate">{cuenta.email}</span>
+                  <span className="text-coffee-300/60 text-xs block">{cuenta.detalle}</span>
                 </button>
               ))}
             </div>

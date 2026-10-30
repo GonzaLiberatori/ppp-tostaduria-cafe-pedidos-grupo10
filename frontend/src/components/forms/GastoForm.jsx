@@ -44,19 +44,24 @@ export default function GastoForm({ isOpen, onClose, initialData, onSubmit }) {
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!validate()) return
-    
+
     setSubmitting(true)
     const data = {
       categoria: formData.categoria,
       descripcion: formData.descripcion.trim(),
       monto: parseFloat(formData.monto),
-      fecha: new Date(formData.fecha).toISOString(),
+      // Se evita `toISOString()` para que la zona horaria no mueva el día.
+      fecha: `${formData.fecha}T00:00:00`,
     }
-    onSubmit(data, initialData?.id)
-    setSubmitting(false)
+
+    try {
+      await onSubmit(data, initialData?.id)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const handleChange = (e) => {

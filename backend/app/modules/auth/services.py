@@ -1,48 +1,70 @@
-from typing import Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from typing import Optional
+from app.modules.auth import models, schemas, crud
+from app.modules.clientes.models import Cliente, Persona
+from app.core.security import create_access_token
 
-from app.modules.auth.models import Usuario
-from app.core.security import verify_password, get_password_hash
+
+# Traducción del rol canónico al rol que usa el frontend.
+ROLES_FRONTEND = {
+    models.UserRole.ADMINISTRADOR: "admin",
+    models.UserRole.CAJERO: "vendedor",
+    models.UserRole.OPERARIO: "empleado",
+    models.UserRole.CLIENTE: "cliente",
+}
 
 
 class AuthService:
-    """Servicio de autenticación."""
+    def __init__(self, db: Session):
+        self.db = db
 
-    def get_by_id(self, user_id: int, session: Session) -> Optional[Usuario]:
-        """Obtiene usuario por ID."""
-        stmt = select(Usuario).where(Usuario.id == user_id)
-        return session.execute(stmt).scalar_one_or_none()
+    def register(self, user_data: schemas.UserCreate) -> models.Cuenta:
+        existing = crud.get_user_by_email(self.db, user_data.email)
+        if existing:
+            raise ValueError("El email ya está registrado")
+        return crud.create_user(self.db, user_data)
 
-    def get_by_username(self, username: str, session: Session) -> Optional[Usuario]:
-        """Obtiene usuario por username."""
-        stmt = select(Usuario).where(Usuario.username == username)
-        return session.execute(stmt).scalar_one_or_none()
-
-    def authenticate(self, username: str, password: str, session: Session) -> Optional[Usuario]:
-        """Autentica usuario con username y password."""
-        user = self.get_by_username(username, session)
+    def login(self, login_data: schemas.UserLogin) -> schemas.Token:
+        user = crud.authenticate_user(self.db, login_data.email, login_data.password)
         if not user:
-            return None
-        if not verify_password(password, user.hashed_password):
-            return None
-        return user
+            raise ValueError("Credenciales inválidas")
+        access_token = crud.create_token_for_user(user)
+        return schemas.Token(access_token=access_token, token_type="bearer")
 
-    def create_user(
-        self,
-        session: Session,
-        username: str,
-        email: str,
-        password: str,
-        rol: str = "operador",
-    ) -> Usuario:
-        """Crea un nuevo usuario."""
-        user = Usuario(
-            username=username,
-            email=email,
-            hashed_password=get_password_hash(password),
-            rol=rol,
+    def obtener_perfil(self, email: str) -> schemas.UserMeResponse:
+        """Devuelve el perfil del usuario, vinculando la cuenta con su persona.
+
+        La relación es ``Persona.cuenta_id``; si esa persona además es cliente,
+        se expone su ``persona_id`` como ``clienteId`` para el portal B2C.
+        """
+        cuenta = crud.get_user_by_email(self.db, email)
+        if not cuenta:
+            raise ValueError("Usuario no encontrado")
+
+        persona = (
+            self.db.query(Persona)
+            .filter(Persona.cuenta_id == cuenta.id)
+            .first()
         )
-        session.add(user)
-        session.flush()
-        return user
+        cliente = (
+            self.db.query(Cliente)
+            .filter(Cliente.persona_id == persona.id)
+            .first()
+            if persona
+            else None
+        )
+
+        nombre = (
+            f"{persona.nombre} {persona.apellido}".strip()
+            if persona
+            else cuenta.correo
+        )
+
+        return schemas.UserMeResponse(
+            id=cuenta.id,
+            correo=cuenta.correo,
+            rol=cuenta.rol.value,
+            role=ROLES_FRONTEND.get(cuenta.rol, "cliente"),
+            nombre=nombre,
+            clienteId=str(cliente.persona_id) if cliente else None,
+        )
