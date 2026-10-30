@@ -1,169 +1,183 @@
-import React, { useState, useMemo } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useData } from '../context/DataContext'
-import { TIPOS_STOCK } from '../data/constants'
-import StockForm from '../components/forms/StockForm'
-import BolsaCard from '../components/forms/BolsaCard'
-import Table from '../components/ui/Table'
+import CafeForm from '../components/forms/CafeForm'
+import LoteForm from '../components/forms/LoteForm'
+import LoteCard from '../components/forms/LoteCard'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
 import Select from '../components/ui/Select'
 import { formatearMoneda, formatearKilos, formatearFecha } from '../utils/formatters'
-import { Package, Plus, Filter, Trash2, Edit, AlertTriangle, ChevronDown, ChevronUp, Coffee, Package2 } from 'lucide-react'
+import { nombreCafe, origenCafe, esOrganico, kilosCafe } from '../utils/cafes'
+import { TIPOS_CAFE, TIPOS_LOTE } from '../data/constants'
+import { Package, Plus, Filter, Trash2, Pencil, AlertTriangle, ChevronDown, ChevronUp, Coffee, Package2 } from 'lucide-react'
 
 export default function Stock() {
-  const { 
-    stock, 
-    addStock, 
-    updateStock, 
-    deleteStock, 
-    getTotalKilosStock,
-    getStockByTipo,
-    addBolsa,
-    updateBolsa,
-    deleteBolsa,
+  const {
+    cafes,
+    ordenesTueste,
+    addCafe,
+    updateCafe,
+    deleteCafe,
+    addLote,
+    updateLote,
+    deleteLote,
+    getOrdenTuesteById,
   } = useData()
 
-  const [showForm, setShowForm] = useState(false)
-  const [editingItem, setEditingItem] = useState(null)
-  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [showCafeForm, setShowCafeForm] = useState(false)
+  const [editingCafe, setEditingCafe] = useState(null)
+  const [showLoteForm, setShowLoteForm] = useState(false)
+  const [loteCafeId, setLoteCafeId] = useState(null)
+  const [editingLote, setEditingLote] = useState(null)
   const [expandedRow, setExpandedRow] = useState(null)
-  const [filters, setFilters] = useState({ tipo: '', search: '' })
-  const [bolsaEditMode, setBolsaEditMode] = useState(null) // stockId para editar bolsas
+  const [filters, setFilters] = useState({ tipoProducto: '', tipoLote: '', search: '' })
+  const [deleteCafeConfirm, setDeleteCafeConfirm] = useState(null)
+  const [deleteLoteConfirm, setDeleteLoteConfirm] = useState(null)
 
-  const totalVerde = getTotalKilosStock('verde')
-  const totalTostado = getTotalKilosStock('tostado')
-  const valorVerde = getStockByTipo('verde').reduce((sum, s) => sum + calcularKilosTotales(s) * s.precioKg, 0)
-  const valorTostado = getStockByTipo('tostado').reduce((sum, s) => sum + calcularKilosTotales(s) * s.precioKg, 0)
+  const cafesPorId = useMemo(
+    () => Object.fromEntries(cafes.map(cafe => [cafe.id, cafe])),
+    [cafes]
+  )
 
-  function calcularKilosTotales(item) {
-    if (!item.bolsas || !Array.isArray(item.bolsas)) return 0
-    return item.bolsas.reduce((sum, b) => sum + (b.kilos || 0), 0)
-  }
+  const totalVerde = cafes.reduce((sum, cafe) => sum + kilosCafe(cafe, 'verde'), 0)
+  const totalTostado = cafes.reduce((sum, cafe) => sum + kilosCafe(cafe, 'tostado'), 0)
+  const valorVerde = cafes.reduce((sum, cafe) => sum + kilosCafe(cafe, 'verde') * (cafe.precioKg || 0), 0)
+  const valorTostado = cafes.reduce((sum, cafe) => sum + kilosCafe(cafe, 'tostado') * (cafe.precioKg || 0), 0)
 
-  const filteredStock = useMemo(() => {
-    return stock.filter(item => {
-      const matchesTipo = !filters.tipo || item.tipo === filters.tipo
-      const matchesSearch = !filters.search || 
-        item.variedad.toLowerCase().includes(filters.search.toLowerCase()) ||
-        item.origen.toLowerCase().includes(filters.search.toLowerCase()) ||
-        item.lotePrincipal.toLowerCase().includes(filters.search.toLowerCase())
-      return matchesTipo && matchesSearch
+  const filteredCafes = useMemo(() => {
+    return cafes.filter(cafe => {
+      const texto = [nombreCafe(cafe), cafe.variedad, cafe.pais, cafe.region, cafe.descripcion]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      const matchesSearch = !filters.search || texto.includes(filters.search.toLowerCase())
+      const matchesTipo = !filters.tipoProducto || cafe.tipoProducto === filters.tipoProducto
+      const matchesLote = !filters.tipoLote || kilosCafe(cafe, filters.tipoLote) > 0
+      return matchesSearch && matchesTipo && matchesLote
     })
-  }, [stock, filters])
+  }, [cafes, filters])
 
-  const handleSubmit = (data, id) => {
+  const alertasStock = useMemo(() => {
+    return cafes.flatMap(cafe => {
+      const lotes = cafe.lotes || []
+      const alertas = []
+      if (lotes.some(l => l.tipo === 'verde') && kilosCafe(cafe, 'verde') < 30) {
+        alertas.push({ cafe, tipo: 'verde' })
+      }
+      if (lotes.some(l => l.tipo === 'tostado') && kilosCafe(cafe, 'tostado') < 5) {
+        alertas.push({ cafe, tipo: 'tostado' })
+      }
+      return alertas
+    })
+  }, [cafes])
+
+  const handleCafeSubmit = (data, id) => {
     if (id) {
-      updateStock(id, data)
+      updateCafe(id, data)
     } else {
-      addStock(data)
+      addCafe(data)
     }
-    setShowForm(false)
-    setEditingItem(null)
+    setShowCafeForm(false)
+    setEditingCafe(null)
   }
 
-  const handleEdit = (item) => {
-    setEditingItem(item)
-    setShowForm(true)
+  const handleEditCafe = (cafe) => {
+    setEditingCafe(cafe)
+    setShowCafeForm(true)
     setExpandedRow(null)
   }
 
-  const handleDelete = (id) => {
-    setDeleteConfirm(id)
+  const abrirNuevoLote = (cafeId) => {
+    setEditingLote(null)
+    setLoteCafeId(cafeId)
+    setShowLoteForm(true)
   }
 
-  const confirmDelete = () => {
-    if (deleteConfirm) {
-      deleteStock(deleteConfirm)
-      setDeleteConfirm(null)
+  const abrirEditarLote = (cafeId, lote) => {
+    setEditingLote(lote)
+    setLoteCafeId(cafeId)
+    setShowLoteForm(true)
+  }
+
+  const handleLoteSubmit = (data, loteId, cafeOrigenId) => {
+    if (loteId) {
+      updateLote(cafeOrigenId, loteId, data)
+    } else {
+      addLote(data.cafeId, data)
+    }
+    setShowLoteForm(false)
+    setEditingLote(null)
+    setLoteCafeId(null)
+  }
+
+  const confirmDeleteCafe = () => {
+    if (deleteCafeConfirm) {
+      deleteCafe(deleteCafeConfirm)
+      setDeleteCafeConfirm(null)
     }
   }
 
-  const toggleExpand = (id) => {
-    setExpandedRow(prev => prev === id ? null : id)
-  }
-
-  const handleBolsaUpdateKilos = (stockId, bolsaId, kilos) => {
-    updateBolsa(stockId, bolsaId, { kilos })
-  }
-
-  const handleBolsaToggleEstado = (stockId, bolsaId) => {
-    const item = stock.find(s => s.id === stockId)
-    const bolsa = item?.bolsas.find(b => b.id === bolsaId)
-    if (bolsa) {
-      updateBolsa(stockId, bolsaId, { estado: bolsa.estado === 'cerrada' ? 'abierta' : 'cerrada' })
+  const confirmDeleteLote = () => {
+    if (deleteLoteConfirm) {
+      deleteLote(deleteLoteConfirm.cafeId, deleteLoteConfirm.loteId)
+      setDeleteLoteConfirm(null)
     }
   }
 
-  const handleBolsaDelete = (stockId, bolsaId) => {
-    deleteBolsa(stockId, bolsaId)
-  }
-
-  const handleAddBolsa = (stockId) => {
-    const item = stock.find(s => s.id === stockId)
-    const nuevoNumero = (item?.bolsas?.length || 0) + 1
-    const loteRef = `${item?.lotePrincipal || 'LOTE'}-${String(nuevoNumero).padStart(2, '0')}`
-    addBolsa(stockId, {
-      estado: 'cerrada',
-      kilos: item.tipo === 'verde' ? 60 : 1,
-      loteRef,
-    })
-  }
-
-  const columns = [
-    { key: 'lotePrincipal', header: 'Lote', width: '130px', render: (v) => <code className="text-sm bg-[var(--color-bg-tertiary)] px-2 py-0.5 rounded">{v}</code> },
-    { key: 'tipo', header: 'Tipo', width: '100px', render: (v) => <Badge variant={v === 'verde' ? 'success' : 'coffee'}>{v === 'verde' ? 'Verde' : 'Tostado'}</Badge> },
-    { key: 'variedad', header: 'Variedad', render: (_, row) => (
+  const renderLotes = (cafe, estado) => {
+    const lotes = (cafe.lotes || []).filter(lote => lote.estado === estado)
+    if (lotes.length === 0) return null
+    return (
       <div>
-        <p className="font-medium text-[var(--color-text-primary)]">{row.variedad}</p>
-        <p className="text-xs text-[var(--color-text-muted)]">{row.origen}</p>
-      </div>
-    )},
-    { key: 'bolsasCount', header: 'Bolsas', width: '90px', render: (_, row) => {
-      const cerradas = row.bolsas?.filter(b => b.estado === 'cerrada').length || 0
-      const abiertas = row.bolsas?.filter(b => b.estado === 'abierta').length || 0
-      return (
-        <div className="flex items-center gap-2">
-          <Badge variant="success" className="text-xs">{cerradas} 🔒</Badge>
-          <Badge variant="warning" className="text-xs">{abiertas} 🔓</Badge>
+        <h4 className="mb-3 flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
+          <span className={`h-2 w-2 rounded-full ${estado === 'cerrado' ? 'bg-green-500' : 'bg-amber-500'}`}></span>
+          Lotes {estado === 'cerrado' ? 'cerrados' : 'abiertos'} ({lotes.length})
+        </h4>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {lotes.map(lote => (
+            <LoteCard
+              key={lote.id}
+              lote={lote}
+              ordenTuesteId={getOrdenTuesteById(lote.ordenTuesteId)?.id}
+              onEdit={() => abrirEditarLote(cafe.id, lote)}
+              onDelete={() => setDeleteLoteConfirm({ cafeId: cafe.id, loteId: lote.id })}
+            />
+          ))}
         </div>
-      )
-    }},
-    { key: 'kilos', header: 'Total Kilos', width: '110px', render: (_, row) => <span className="font-mono tabular-nums font-medium">{formatearKilos(calcularKilosTotales(row))}</span> },
-    { key: 'precioKg', header: 'Precio/Kg', width: '110px', render: (v) => formatearMoneda(v), className: 'font-mono tabular-nums' },
-    { key: 'valor', header: 'Valor Total', render: (_, row) => formatearMoneda(calcularKilosTotales(row) * row.precioKg), className: 'font-mono tabular-nums font-medium text-right' },
-    { key: 'fechaIngreso', header: 'Ingreso', width: '110px', render: (v) => formatearFecha(v) },
-  ]
-
-  const lowStockItems = stock.filter(s => calcularKilosTotales(s) < (s.tipo === 'tostado' ? 5 : 30))
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--color-text-primary)] flex items-center gap-2">
-            <Package2 className="w-6 h-6 text-coffee-500" />
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--color-text-primary)]">
+            <Package2 className="h-6 w-6 text-coffee-500" />
             Stock de Café
           </h1>
-          <p className="text-[var(--color-text-muted)]">Gestión de café verde y tostado por bolsas</p>
+          <p className="text-[var(--color-text-muted)]">Catálogo de cafés simples y blends, con lotes de café verde y tostado</p>
         </div>
-        <Button onClick={() => { setEditingItem(null); setShowForm(true); }}>
-          <Plus className="w-4 h-4" />
+        <Button onClick={() => { setEditingCafe(null); setShowCafeForm(true) }}>
+          <Plus className="h-4 w-4" />
           Nuevo Café
         </Button>
       </div>
 
-      {lowStockItems.length > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+      {alertasStock.length > 0 && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
             <div className="flex-1">
               <h3 className="font-medium text-amber-900 dark:text-amber-100">Stock Bajo</h3>
-              <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                {lowStockItems.length} variedad{lowStockItems.length !== 1 ? 'es' : ''} por debajo del mínimo:
-                <ul className="mt-1 list-disc list-inside text-xs">
-                  {lowStockItems.map(item => (
-                    <li key={item.id}>{item.variedad} ({formatearKilos(calcularKilosTotales(item))}) - {item.tipo === 'verde' ? 'Verde' : 'Tostado'}</li>
+              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                {alertasStock.length} alerta{alertasStock.length !== 1 ? 's' : ''} por debajo del mínimo (verde &lt; 30 kg, tostado &lt; 5 kg):
+                <ul className="mt-1 list-inside list-disc text-xs">
+                  {alertasStock.map(({ cafe, tipo }) => (
+                    <li key={`${cafe.id}-${tipo}`}>
+                      {nombreCafe(cafe)} ({formatearKilos(kilosCafe(cafe, tipo))}) - {tipo === 'verde' ? 'Verde' : 'Tostado'}
+                    </li>
                   ))}
                 </ul>
               </p>
@@ -177,11 +191,11 @@ export default function Stock() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Café Verde Total</p>
-              <p className="text-2xl font-bold text-[var(--color-text-primary)] mt-1">{formatearKilos(totalVerde)}</p>
-              <p className="text-sm text-[var(--color-text-muted)] mt-1">Valor: {formatearMoneda(valorVerde)}</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">{formatearKilos(totalVerde)}</p>
+              <p className="mt-1 text-sm text-[var(--color-text-muted)]">Valor: {formatearMoneda(valorVerde)}</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center">
-              <Coffee className="w-6 h-6 text-green-600 dark:text-green-400" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-green-500/10">
+              <Coffee className="h-6 w-6 text-green-600 dark:text-green-400" />
             </div>
           </div>
         </div>
@@ -189,11 +203,11 @@ export default function Stock() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Café Tostado Total</p>
-              <p className="text-2xl font-bold text-[var(--color-text-primary)] mt-1">{formatearKilos(totalTostado)}</p>
-              <p className="text-sm text-[var(--color-text-muted)] mt-1">Valor: {formatearMoneda(valorTostado)}</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">{formatearKilos(totalTostado)}</p>
+              <p className="mt-1 text-sm text-[var(--color-text-muted)]">Valor: {formatearMoneda(valorTostado)}</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-coffee-500/10 flex items-center justify-center">
-              <Package2 className="w-6 h-6 text-coffee-600 dark:text-coffee-400" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-coffee-500/10">
+              <Package2 className="h-6 w-6 text-coffee-600 dark:text-coffee-400" />
             </div>
           </div>
         </div>
@@ -201,44 +215,54 @@ export default function Stock() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Valor Inventario</p>
-              <p className="text-2xl font-bold text-[var(--color-text-primary)] mt-1">{formatearMoneda(valorVerde + valorTostado)}</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">{formatearMoneda(valorVerde + valorTostado)}</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center">
-              <Package className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10">
+              <Package className="h-6 w-6 text-blue-600 dark:text-blue-400" />
             </div>
           </div>
         </div>
         <div className="card p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-[var(--color-text-muted)]">Variedades</p>
-              <p className="text-2xl font-bold text-[var(--color-text-primary)] mt-1">{stock.length}</p>
+              <p className="text-sm text-[var(--color-text-muted)]">Cafés</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">{cafes.length}</p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                {cafes.filter(c => c.tipoProducto === 'simple').length} simples · {cafes.filter(c => c.tipoProducto === 'blend').length} blends
+              </p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center">
-              <Package2 className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/10">
+              <Package2 className="h-6 w-6 text-purple-600 dark:text-purple-400" />
             </div>
           </div>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="card-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="font-semibold text-[var(--color-text-primary)]">Catálogo de Cafés</h2>
-          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
             <div className="relative flex-1 sm:w-64">
-              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-text-muted)]" />
+              <Filter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
               <Input
-                placeholder="Buscar variedad, origen, lote..."
+                placeholder="Buscar variedad, origen, blend..."
                 value={filters.search}
                 onChange={e => setFilters(prev => ({ ...prev, search: e.target.value }))}
                 className="pl-10"
               />
             </div>
             <Select
-              value={filters.tipo}
-              onChange={e => setFilters(prev => ({ ...prev, tipo: e.target.value }))}
-              options={[{ value: '', label: 'Todos los tipos' }, ...TIPOS_STOCK]}
+              value={filters.tipoProducto}
+              onChange={e => setFilters(prev => ({ ...prev, tipoProducto: e.target.value }))}
+              options={[{ value: '', label: 'Simple y Blend' }, ...TIPOS_CAFE]}
               className="w-full sm:w-40"
+              label=""
+            />
+            <Select
+              value={filters.tipoLote}
+              onChange={e => setFilters(prev => ({ ...prev, tipoLote: e.target.value }))}
+              options={[{ value: '', label: 'Todos los lotes' }, ...TIPOS_LOTE]}
+              className="w-full sm:w-44"
               label=""
             />
           </div>
@@ -248,162 +272,148 @@ export default function Stock() {
             <table className="table">
               <thead>
                 <tr>
-                  {columns.map((col, index) => (
-                    <th key={col.key || index} scope="col" style={{ width: col.width }}>
-                      {col.header}
-                    </th>
-                  ))}
-                  <th scope="col" style={{ width: '48px' }}>Acciones</th>
+                  <th scope="col">Variedad y origen</th>
+                  <th scope="col" className="text-right">Café verde</th>
+                  <th scope="col" className="text-right">Café tostado</th>
+                  <th scope="col" className="text-right">Precio / kg</th>
+                  <th scope="col">Orgánico</th>
+                  <th scope="col" style={{ width: '96px' }}>Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredStock.map((row, rowIndex) => (
-                  <React.Fragment key={row.id}>
-                    <tr 
-                      onClick={() => toggleExpand(row.id)}
-                      className={`cursor-pointer transition-colors ${expandedRow === row.id ? 'bg-coffee-500/5' : ''}`}
-                    >
-                      {columns.map((col, colIndex) => (
-                        <td key={col.key || colIndex} className={col.className}>
-                          {col.render ? col.render(row[col.key], row) : row[col.key]}
-                        </td>
-                      ))}
-                      <td className="text-center">
-                        <button
-                          onClick={e => { e.stopPropagation(); handleEdit(row); }}
-                          className="btn-ghost btn-sm p-1.5 rounded-lg"
-                          aria-label="Editar"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                    
-                    {expandedRow === row.id && (
-                      <tr>
-                        <td colSpan={columns.length + 1} className="p-0">
-                          <div className="bg-[var(--color-bg-tertiary)] border-t border-[var(--color-border)] animate-slide-in">
-                            <div className="p-4 sm:p-6">
-                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-                                <div className="flex items-center gap-3">
-                                  <span className={`w-10 h-10 rounded-lg flex items-center justify-center ${row.tipo === 'verde' ? 'bg-green-500/10' : 'bg-coffee-500/10'}`}>
-                                    {row.tipo === 'verde' ? <Coffee className="w-5 h-5 text-green-600" /> : <Package2 className="w-5 h-5 text-coffee-600" />}
-                                  </span>
-                                  <div>
-                                    <h3 className="font-semibold text-lg text-[var(--color-text-primary)]">{row.variedad}</h3>
-                                    <p className="text-sm text-[var(--color-text-muted)]">{row.origen} · Lote: {row.lotePrincipal}</p>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Button variant="secondary" size="sm" onClick={() => setBolsaEditMode(row.id)}>
-                                    {bolsaEditMode === row.id ? 'Ver' : 'Editar Bolsas'}
-                                  </Button>
-                                  <Button variant="ghost" size="sm" onClick={() => handleAddBolsa(row.id)}>
-                                    <Plus className="w-4 h-4" />
-                                    Agregar Bolsa
-                                  </Button>
-                                </div>
-                              </div>
+                {filteredCafes.map(cafe => {
+                  const expandido = expandedRow === cafe.id
+                  const verde = kilosCafe(cafe, 'verde')
+                  const tostado = kilosCafe(cafe, 'tostado')
+                  const organico = esOrganico(cafe, cafesPorId)
 
-                              {bolsaEditMode === row.id ? (
-                                <div className="space-y-4">
-                                  <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
-                                    <span>Click en 🔒/🔓 para cambiar estado · "Vaciar" para poner a 0 · Editar kilos directamente</span>
-                                  </div>
-                                  
-                                  <div className="grid gap-4 lg:grid-cols-2">
-                                    <div>
-                                      <h4 className="font-medium text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-                                        <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                                        Bolsas Cerradas ({row.bolsas?.filter(b => b.estado === 'cerrada').length || 0})
-                                      </h4>
-                                      <div className="space-y-2 max-h-64 overflow-y-auto">
-                                        {row.bolsas?.filter(b => b.estado === 'cerrada').map((bolsa, index) => (
-                                          <BolsaCard
-                                            key={bolsa.id}
-                                            bolsa={bolsa}
-                                            index={index}
-                                            onUpdateKilos={(id, kilos) => handleBolsaUpdateKilos(row.id, id, kilos)}
-                                            onToggleEstado={(id) => handleBolsaToggleEstado(row.id, id)}
-                                            onDelete={(id) => handleBolsaDelete(row.id, id)}
-                                            editable
-                                          />
-                                        ))}
-                                        {row.bolsas?.filter(b => b.estado === 'cerrada').length === 0 && (
-                                          <p className="text-center text-[var(--color-text-muted)] py-4 text-sm">Sin bolsas cerradas</p>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <h4 className="font-medium text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-                                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                                        Bolsas Abiertas ({row.bolsas?.filter(b => b.estado === 'abierta').length || 0})
-                                      </h4>
-                                      <div className="space-y-2 max-h-64 overflow-y-auto">
-                                        {row.bolsas?.filter(b => b.estado === 'abierta').map((bolsa, index) => (
-                                          <BolsaCard
-                                            key={bolsa.id}
-                                            bolsa={bolsa}
-                                            index={index}
-                                            onUpdateKilos={(id, kilos) => handleBolsaUpdateKilos(row.id, id, kilos)}
-                                            onToggleEstado={(id) => handleBolsaToggleEstado(row.id, id)}
-                                            onDelete={(id) => handleBolsaDelete(row.id, id)}
-                                            editable
-                                          />
-                                        ))}
-                                        {row.bolsas?.filter(b => b.estado === 'abierta').length === 0 && (
-                                          <p className="text-center text-[var(--color-text-muted)] py-4 text-sm">Sin bolsas abiertas</p>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="grid gap-4 lg:grid-cols-2">
-                                  <div>
-                                    <h4 className="font-medium text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-                                      <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                                      Bolsas Cerradas
-                                    </h4>
-                                    <div className="grid gap-2 sm:grid-cols-2">
-                                      {row.bolsas?.filter(b => b.estado === 'cerrada').map((bolsa, index) => (
-                                        <BolsaCard key={bolsa.id} bolsa={bolsa} index={index} />
-                                      ))}
-                                      {row.bolsas?.filter(b => b.estado === 'cerrada').length === 0 && (
-                                        <div className="col-span-full text-center text-[var(--color-text-muted)] py-4 text-sm">Sin bolsas cerradas</div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <h4 className="font-medium text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-                                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                                      Bolsas Abiertas
-                                    </h4>
-                                    <div className="grid gap-2 sm:grid-cols-2">
-                                      {row.bolsas?.filter(b => b.estado === 'abierta').map((bolsa, index) => (
-                                        <BolsaCard key={bolsa.id} bolsa={bolsa} index={index} />
-                                      ))}
-                                      {row.bolsas?.filter(b => b.estado === 'abierta').length === 0 && (
-                                        <div className="col-span-full text-center text-[var(--color-text-muted)] py-4 text-sm">Sin bolsas abiertas</div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
+                  return (
+                    <Fragment key={cafe.id}>
+                      <tr
+                        onClick={() => setExpandedRow(prev => (prev === cafe.id ? null : cafe.id))}
+                        className={`cursor-pointer transition-colors ${expandido ? 'bg-coffee-500/5' : ''}`}
+                      >
+                        <td>
+                          <div className="flex items-start gap-2">
+                            <span className={`mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${cafe.tipoProducto === 'blend' ? 'bg-coffee-500/10' : 'bg-green-500/10'}`}>
+                              {cafe.tipoProducto === 'blend'
+                                ? <Package2 className="h-4 w-4 text-coffee-600 dark:text-coffee-400" />
+                                : <Coffee className="h-4 w-4 text-green-600 dark:text-green-400" />}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-medium text-[var(--color-text-primary)]">{nombreCafe(cafe)}</p>
+                                <Badge variant={cafe.tipoProducto === 'blend' ? 'coffee' : 'info'} className="text-xs">
+                                  {cafe.tipoProducto === 'blend' ? 'Blend' : 'Simple'}
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-[var(--color-text-muted)]">{origenCafe(cafe)}</p>
                             </div>
                           </div>
                         </td>
+                        <td className="text-right font-mono tabular-nums">{formatearKilos(verde)}</td>
+                        <td className="text-right font-mono tabular-nums">{formatearKilos(tostado)}</td>
+                        <td className="text-right font-mono tabular-nums">{formatearMoneda(cafe.precioKg || 0)}</td>
+                        <td>
+                          <Badge variant={organico ? 'success' : 'default'} className="text-xs">
+                            {organico ? 'Sí' : 'No'}
+                          </Badge>
+                        </td>
+                        <td>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); handleEditCafe(cafe) }}
+                              className="btn-ghost btn-sm rounded-lg p-1.5"
+                              aria-label={`Editar ${nombreCafe(cafe)}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); setDeleteCafeConfirm(cafe.id) }}
+                              className="btn-ghost btn-sm rounded-lg p-1.5"
+                              aria-label={`Eliminar ${nombreCafe(cafe)}`}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </button>
+                            {expandido ? <ChevronUp className="h-4 w-4 text-[var(--color-text-muted)]" /> : <ChevronDown className="h-4 w-4 text-[var(--color-text-muted)]" />}
+                          </div>
+                        </td>
                       </tr>
-                    )}
-                  </React.Fragment>
-                ))}
+
+                      {expandido && (
+                        <tr>
+                          <td colSpan={6} className="p-0">
+                            <div className="animate-slide-in border-t border-[var(--color-border)] bg-[var(--color-bg-tertiary)]">
+                              <div className="space-y-4 p-4 sm:p-6">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                  <div>
+                                    <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">{nombreCafe(cafe)}</h3>
+                                    <p className="text-sm text-[var(--color-text-muted)]">
+                                      {origenCafe(cafe)} · Alta: {formatearFecha(cafe.fechaIngreso)}
+                                    </p>
+                                    {cafe.tipoProducto === 'blend' && cafe.descripcion && (
+                                      <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{cafe.descripcion}</p>
+                                    )}
+                                  </div>
+                                  <Button variant="secondary" size="sm" onClick={() => handleEditCafe(cafe)}>
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    Editar café
+                                  </Button>
+                                </div>
+
+                                {cafe.tipoProducto === 'blend' && (
+                                  <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
+                                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--color-text-muted)]">Composición de la mezcla</p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {(cafe.mezcla || []).map(({ cafeId, porcentaje }) => {
+                                        const componente = cafesPorId[cafeId]
+                                        return (
+                                          <Badge key={cafeId} variant="coffee" className="text-xs">
+                                            {componente ? nombreCafe(componente) : 'Café eliminado'} · {porcentaje}%
+                                          </Badge>
+                                        )
+                                      })}
+                                      {(cafe.mezcla || []).length === 0 && (
+                                        <span className="text-sm text-[var(--color-text-muted)]">Sin componentes definidos</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                  {renderLotes(cafe, 'cerrado')}
+                                  {renderLotes(cafe, 'abierto')}
+                                </div>
+
+                                {(cafe.lotes || []).length === 0 && (
+                                  <p className="py-2 text-center text-sm text-[var(--color-text-muted)]">Este café todavía no tiene lotes cargados</p>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => abrirNuevoLote(cafe.id)}
+                                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--color-border)] px-4 py-3 text-sm font-medium text-[var(--color-text-muted)] transition-colors hover:border-coffee-500/40 hover:text-[var(--color-text-primary)]"
+                                >
+                                  <Plus className="h-4 w-4" />
+                                  Crear lote
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
-          
-          {filteredStock.length === 0 && (
+
+          {filteredCafes.length === 0 && (
             <div className="empty-state">
-              <Package2 className="empty-state-icon w-12 h-12" />
+              <Package2 className="empty-state-icon h-12 w-12" />
               <p className="empty-state-title">Sin resultados</p>
               <p className="empty-state-description">No hay cafés que coincidan con los filtros</p>
             </div>
@@ -411,25 +421,53 @@ export default function Stock() {
         </div>
       </div>
 
-      <StockForm
-        isOpen={showForm}
-        onClose={() => { setShowForm(false); setEditingItem(null); }}
-        initialData={editingItem}
-        onSubmit={handleSubmit}
+      <CafeForm
+        isOpen={showCafeForm}
+        onClose={() => { setShowCafeForm(false); setEditingCafe(null) }}
+        initialData={editingCafe}
+        onSubmit={handleCafeSubmit}
+        cafes={cafes}
       />
 
-      {deleteConfirm && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+      <LoteForm
+        isOpen={showLoteForm}
+        onClose={() => { setShowLoteForm(false); setEditingLote(null); setLoteCafeId(null) }}
+        initialData={editingLote}
+        cafeIdInicial={loteCafeId}
+        onSubmit={handleLoteSubmit}
+        cafes={cafes}
+        ordenesTueste={ordenesTueste}
+      />
+
+      {deleteCafeConfirm && (
+        <div className="modal-overlay" onClick={() => setDeleteCafeConfirm(null)}>
           <div className="modal-content max-w-md" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="text-lg font-semibold">Confirmar eliminación</h2>
             </div>
             <div className="modal-body">
-              <p className="text-[var(--color-text-secondary)]">¿Está seguro de eliminar este café y todas sus bolsas? Esta acción no se puede deshacer.</p>
+              <p className="text-[var(--color-text-secondary)]">¿Seguro que querés eliminar este café y todos sus lotes? Esta acción no se puede deshacer.</p>
             </div>
             <div className="modal-footer">
-              <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancelar</Button>
-              <Button variant="danger" onClick={confirmDelete}>Eliminar</Button>
+              <Button variant="secondary" onClick={() => setDeleteCafeConfirm(null)}>Cancelar</Button>
+              <Button variant="danger" onClick={confirmDeleteCafe}>Eliminar</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteLoteConfirm && (
+        <div className="modal-overlay" onClick={() => setDeleteLoteConfirm(null)}>
+          <div className="modal-content max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="text-lg font-semibold">Eliminar lote</h2>
+            </div>
+            <div className="modal-body">
+              <p className="text-[var(--color-text-secondary)]">¿Seguro que querés eliminar este lote? El stock de kilos se descontará del café.</p>
+            </div>
+            <div className="modal-footer">
+              <Button variant="secondary" onClick={() => setDeleteLoteConfirm(null)}>Cancelar</Button>
+              <Button variant="danger" onClick={confirmDeleteLote}>Eliminar lote</Button>
             </div>
           </div>
         </div>

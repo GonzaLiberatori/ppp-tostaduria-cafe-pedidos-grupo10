@@ -4,7 +4,7 @@ import { formatearMoneda, formatearKilos, formatearFecha } from '../../utils/for
 import { ShoppingCart, List, User, Clock, Package } from 'lucide-react'
 
 export default function InicioCliente() {
-  const { pedidos, getPedidosByCliente, getTotalKilosStock } = useData()
+  const { pedidos, getPedidosByCliente, getTotalKilosPorTipo } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
@@ -18,8 +18,8 @@ export default function InicioCliente() {
     .filter(p => p.estado === 'Entregado')
     .reduce((sum, p) => sum + p.items.reduce((s, i) => s + i.kilos, 0), 0)
 
-  const totalTostado = getTotalKilosStock('tostado')
-  const totalVerde = getTotalKilosStock('verde')
+  const totalTostado = getTotalKilosPorTipo('tostado')
+  const totalVerde = getTotalKilosPorTipo('verde')
 
   return (
     <div className="space-y-6">

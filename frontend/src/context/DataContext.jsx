@@ -1,14 +1,17 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { mockStock, mockClientes, mockPedidos, mockGastos } from '../data/mockData'
+import { mockCafes, mockOrdenesTueste, mockClientes, mockPedidos, mockGastos } from '../data/mockData'
+import { kilosPorTipo } from '../utils/cafes'
 
 const DataContext = createContext(null)
 
 const STORAGE_KEYS = {
-  STOCK: 'cafe-finca-stock',
+  CAFES: 'cafe-finca-cafes-v2',
   CLIENTES: 'cafe-finca-clientes',
   PEDIDOS: 'cafe-finca-pedidos',
   GASTOS: 'cafe-finca-gastos',
 }
+
+const LEGACY_STOCK_KEY = 'cafe-finca-stock'
 
 function loadFromStorage(key, fallback) {
   try {
@@ -27,129 +30,152 @@ function saveToStorage(key, data) {
   }
 }
 
-// Helper para calcular kilos totales de un item de stock
-function calcularKilosTotales(stockItem) {
-  if (!stockItem.bolsas || !Array.isArray(stockItem.bolsas)) return 0
-  return stockItem.bolsas.reduce((sum, bolsa) => sum + (bolsa.kilos || 0), 0)
-}
-
-// Helper para consumir kilos usando FIFO (primero abiertas, luego cerradas)
-function consumirKilosFIFO(bolsas, kilosAConsumir) {
-  const bolsasOrdenadas = [...bolsas].sort((a, b) => {
-    // Primero abiertas (por fecha creacion ascendente), luego cerradas
-    if (a.estado === 'abierta' && b.estado === 'cerrada') return -1
-    if (a.estado === 'cerrada' && b.estado === 'abierta') return 1
-    return new Date(a.fechaCreacion) - new Date(b.fechaCreacion)
-  })
+// Consumo FIFO: primero lotes abiertos, luego cerrados, ambos por antigüedad.
+// Solo se descuentan lotes de café tostado (producto terminado).
+function consumirLotesFIFO(lotes = [], kilosAConsumir) {
+  const ordenados = lotes
+    .filter(lote => lote.tipo === 'tostado')
+    .sort((a, b) => {
+      if (a.estado === 'abierto' && b.estado === 'cerrado') return -1
+      if (a.estado === 'cerrado' && b.estado === 'abierto') return 1
+      return new Date(a.fechaCreacion) - new Date(b.fechaCreacion)
+    })
 
   let restantes = kilosAConsumir
   const consumo = []
-  const nuevasBolsas = bolsas.map(b => ({ ...b }))
+  const nuevasLotes = lotes.map(l => ({ ...l }))
 
-  for (const bolsa of bolsasOrdenadas) {
+  for (const lote of ordenados) {
     if (restantes <= 0) break
-    const idx = nuevasBolsas.findIndex(b => b.id === bolsa.id)
+    const idx = nuevasLotes.findIndex(l => l.id === lote.id)
     if (idx === -1) continue
 
-    const disponible = nuevasBolsas[idx].kilos
+    const disponible = nuevasLotes[idx].kilos || 0
     const consumir = Math.min(disponible, restantes)
-    
+
     if (consumir > 0) {
-      nuevasBolsas[idx].kilos = disponible - consumir
-      // Si era cerrada y se consumió algo, se vuelve abierta
-      if (nuevasBolsas[idx].estado === 'cerrada' && consumir > 0) {
-        nuevasBolsas[idx].estado = 'abierta'
+      nuevasLotes[idx].kilos = disponible - consumir
+      if (nuevasLotes[idx].estado === 'cerrado') {
+        nuevasLotes[idx].estado = 'abierto'
       }
-      consumo.push({ bolsaId: bolsa.id, consumido: consumir })
+      consumo.push({ loteId: lote.id, consumido: consumir })
       restantes -= consumir
     }
   }
 
-  // Eliminar bolsas vacías (kilos <= 0)
-  const bolsasFinales = nuevasBolsas.filter(b => b.kilos > 0.001)
+  const lotesFinales = nuevasLotes.filter(l => (l.kilos || 0) > 0.001)
 
-  return { bolsas: bolsasFinales, consumo, faltante: restantes }
+  return { lotes: lotesFinales, consumo, faltante: Math.max(restantes, 0) }
 }
 
 export function DataProvider({ children }) {
-  const [stock, setStock] = useState(() => loadFromStorage(STORAGE_KEYS.STOCK, mockStock))
+  const [cafes, setCafes] = useState(() => loadFromStorage(STORAGE_KEYS.CAFES, mockCafes))
   const [clientes, setClientes] = useState(() => loadFromStorage(STORAGE_KEYS.CLIENTES, mockClientes))
   const [pedidos, setPedidos] = useState(() => loadFromStorage(STORAGE_KEYS.PEDIDOS, mockPedidos))
   const [gastos, setGastos] = useState(() => loadFromStorage(STORAGE_KEYS.GASTOS, mockGastos))
+  const [ordenesTueste] = useState(mockOrdenesTueste)
   const [isLoaded, setIsLoaded] = useState(false)
 
-  useEffect(() => { setIsLoaded(true) }, [])
+  useEffect(() => {
+    // El modelo anterior de stock (cafés con bolsas) queda descartado.
+    localStorage.removeItem(LEGACY_STOCK_KEY)
+    setIsLoaded(true)
+  }, [])
 
-  useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.STOCK, stock) }, [stock, isLoaded])
+  useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.CAFES, cafes) }, [cafes, isLoaded])
   useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.CLIENTES, clientes) }, [clientes, isLoaded])
   useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.PEDIDOS, pedidos) }, [pedidos, isLoaded])
   useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.GASTOS, gastos) }, [gastos, isLoaded])
 
-  // --- Stock Actions ---
-  const addStock = useCallback((item) => {
-    const newItem = { 
-      ...item, 
-      id: crypto.randomUUID(), 
+  // --- Café Actions ---
+  const addCafe = useCallback((cafe) => {
+    const nuevoCafe = {
+      ...cafe,
+      id: crypto.randomUUID(),
       fechaIngreso: new Date().toISOString(),
-      bolsas: item.bolsas || []
+      lotes: [],
     }
-    setStock(prev => [...prev, newItem])
-    return newItem
+    setCafes(prev => [...prev, nuevoCafe])
+    return nuevoCafe
   }, [])
 
-  const updateStock = useCallback((id, updates) => {
-    setStock(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item))
+  const updateCafe = useCallback((id, updates) => {
+    setCafes(prev => prev.map(cafe => (cafe.id === id ? { ...cafe, ...updates } : cafe)))
   }, [])
 
-  const deleteStock = useCallback((id) => {
-    setStock(prev => prev.filter(item => item.id !== id))
+  const deleteCafe = useCallback((id) => {
+    setCafes(prev => prev.filter(cafe => cafe.id !== id))
   }, [])
 
-  // --- Bolsa Actions ---
-  const addBolsa = useCallback((stockId, bolsa) => {
-    setStock(prev => prev.map(item => {
-      if (item.id !== stockId) return item
-      const nuevaBolsa = { ...bolsa, id: crypto.randomUUID(), fechaCreacion: new Date().toISOString() }
-      return { ...item, bolsas: [...(item.bolsas || []), nuevaBolsa] }
-    }))
+  // --- Lote Actions ---
+  const addLote = useCallback((cafeId, lote) => {
+    const nuevoLote = {
+      ...lote,
+      id: crypto.randomUUID(),
+      fechaCreacion: new Date().toISOString(),
+    }
+    setCafes(prev => prev.map(cafe => (
+      cafe.id === cafeId ? { ...cafe, lotes: [...(cafe.lotes || []), nuevoLote] } : cafe
+    )))
+    return nuevoLote
   }, [])
 
-  const updateBolsa = useCallback((stockId, bolsaId, updates) => {
-    setStock(prev => prev.map(item => {
-      if (item.id !== stockId) return item
-      return {
-        ...item,
-        bolsas: item.bolsas.map(b => b.id === bolsaId ? { ...b, ...updates } : b)
+  const updateLote = useCallback((cafeId, loteId, updates) => {
+    setCafes(prev => {
+      const origen = prev.find(cafe => cafe.id === cafeId)
+      const lote = origen?.lotes?.find(l => l.id === loteId)
+      if (!origen || !lote) return prev
+
+      const { cafeId: cafeDestinoId, ...resto } = updates
+      const loteActualizado = { ...lote, ...resto }
+
+      if (cafeDestinoId && cafeDestinoId !== cafeId) {
+        return prev.map(cafe => {
+          if (cafe.id === cafeId) {
+            return { ...cafe, lotes: cafe.lotes.filter(l => l.id !== loteId) }
+          }
+          if (cafe.id === cafeDestinoId) {
+            return { ...cafe, lotes: [...(cafe.lotes || []), loteActualizado] }
+          }
+          return cafe
+        })
       }
-    }))
+
+      return prev.map(cafe => (
+        cafe.id === cafeId
+          ? { ...cafe, lotes: cafe.lotes.map(l => (l.id === loteId ? loteActualizado : l)) }
+          : cafe
+      ))
+    })
   }, [])
 
-  const deleteBolsa = useCallback((stockId, bolsaId) => {
-    setStock(prev => prev.map(item => {
-      if (item.id !== stockId) return item
-      return { ...item, bolsas: item.bolsas.filter(b => b.id !== bolsaId) }
-    }))
+  const deleteLote = useCallback((cafeId, loteId) => {
+    setCafes(prev => prev.map(cafe => (
+      cafe.id === cafeId
+        ? { ...cafe, lotes: (cafe.lotes || []).filter(l => l.id !== loteId) }
+        : cafe
+    )))
   }, [])
 
-  // Consumo FIFO para pedidos
-  const consumirStockFIFO = useCallback((stockId, kilos) => {
-    let consumoRealizado = []
-    let faltante = 0
-    
-    setStock(prev => prev.map(item => {
-      if (item.id !== stockId) return item
-      const resultado = consumirKilosFIFO(item.bolsas, kilos)
-      consumoRealizado = resultado.consumo
-      faltante = resultado.faltante
-      return { ...item, bolsas: resultado.bolsas }
-    }))
-    
-    return { consumo: consumoRealizado, faltante }
-  }, [])
+  // --- Consumo de stock (ventas) ---
+  const previewConsumoFIFO = useCallback((cafeId, kilos) => {
+    const cafe = cafes.find(c => c.id === cafeId)
+    if (!cafe) return { consumo: [], faltante: kilos }
+    const { consumo, faltante } = consumirLotesFIFO(cafe.lotes || [], kilos)
+    return { consumo, faltante }
+  }, [cafes])
+
+  const consumirStockFIFO = useCallback((cafeId, kilos) => {
+    const cafe = cafes.find(c => c.id === cafeId)
+    if (!cafe) return { consumo: [], faltante: kilos }
+    const { lotes, consumo, faltante } = consumirLotesFIFO(cafe.lotes || [], kilos)
+    setCafes(prev => prev.map(c => (c.id === cafeId ? { ...c, lotes } : c)))
+    return { consumo, faltante }
+  }, [cafes])
 
   // --- Cliente Actions ---
   const addCliente = useCallback((cliente) => {
-    const newCliente = { ...cliente, id: crypto.randomUUID(), creadoEn: new Date().toISOString() }
+    const newCliente = { ...cliente, id: cliente.id || crypto.randomUUID(), creadoEn: new Date().toISOString() }
     setClientes(prev => [...prev, newCliente])
     return newCliente
   }, [])
@@ -197,29 +223,39 @@ export function DataProvider({ children }) {
     return clientes.find(c => c.id === id)
   }, [clientes])
 
-  const getStockById = useCallback((id) => {
-    return stock.find(s => s.id === id)
-  }, [stock])
+  const getCafeById = useCallback((id) => {
+    return cafes.find(c => c.id === id)
+  }, [cafes])
+
+  const getCafesByTipoProducto = useCallback((tipoProducto) => {
+    return cafes.filter(c => c.tipoProducto === tipoProducto)
+  }, [cafes])
+
+  const getKilosPorTipo = useCallback((cafe, tipo) => {
+    return kilosPorTipo(cafe?.lotes || [], tipo)
+  }, [])
+
+  const getTotalKilosPorTipo = useCallback((tipo) => {
+    return cafes.reduce((sum, cafe) => sum + kilosPorTipo(cafe.lotes || [], tipo), 0)
+  }, [cafes])
+
+  const getCafesConTostado = useCallback(() => {
+    return cafes.filter(cafe => kilosPorTipo(cafe.lotes || [], 'tostado') > 0)
+  }, [cafes])
+
+  const getLotesByEstado = useCallback((cafeId, estado) => {
+    const cafe = cafes.find(c => c.id === cafeId)
+    if (!cafe) return []
+    return (cafe.lotes || []).filter(lote => lote.estado === estado)
+  }, [cafes])
+
+  const getOrdenTuesteById = useCallback((id) => {
+    return ordenesTueste.find(orden => orden.id === id)
+  }, [ordenesTueste])
 
   const getPedidosByCliente = useCallback((clienteId) => {
     return pedidos.filter(p => p.clienteId === clienteId)
   }, [pedidos])
-
-  const getStockByTipo = useCallback((tipo) => {
-    return stock.filter(s => s.tipo === tipo)
-  }, [stock])
-
-  const getTotalKilosStock = useCallback((tipo) => {
-    return stock
-      .filter(s => s.tipo === tipo)
-      .reduce((sum, s) => sum + calcularKilosTotales(s), 0)
-  }, [stock])
-
-  const getBolsasByEstado = useCallback((stockId, estado) => {
-    const item = stock.find(s => s.id === stockId)
-    if (!item) return []
-    return item.bolsas.filter(b => b.estado === estado)
-  }, [stock])
 
   const getClientesConDeuda = useCallback(() => {
     return clientes.filter(c => c.tieneDeuda && c.montoDeuda > 0)
@@ -266,33 +302,38 @@ export function DataProvider({ children }) {
       ventasTotales: contabilidad.reduce((sum, m) => sum + m.ventasTotales, 0),
       gastosTotales: contabilidad.reduce((sum, m) => sum + m.gastosTotales, 0),
       gananciaNeta: contabilidad.reduce((sum, m) => sum + m.gananciaNeta, 0),
-      totalKilosVerdes: getTotalKilosStock('verde'),
-      totalKilosTostados: getTotalKilosStock('tostado'),
+      totalKilosVerdes: getTotalKilosPorTipo('verde'),
+      totalKilosTostados: getTotalKilosPorTipo('tostado'),
       clientesConDeuda: getClientesConDeuda().length,
       pedidosPendientes: getPedidosByEstado('Pendiente').length,
     }
-  }, [getContabilidadMensual, getTotalKilosStock, getClientesConDeuda, getPedidosByEstado])
+  }, [getContabilidadMensual, getTotalKilosPorTipo, getClientesConDeuda, getPedidosByEstado])
 
   const value = {
     // State
-    stock,
+    cafes,
+    ordenesTueste,
     clientes,
     pedidos,
     gastos,
     isLoaded,
-    // Stock
-    addStock,
-    updateStock,
-    deleteStock,
-    getStockById,
-    getStockByTipo,
-    getTotalKilosStock,
-    // Bolsas
-    addBolsa,
-    updateBolsa,
-    deleteBolsa,
+    // Cafés
+    addCafe,
+    updateCafe,
+    deleteCafe,
+    getCafeById,
+    getCafesByTipoProducto,
+    getKilosPorTipo,
+    getTotalKilosPorTipo,
+    getCafesConTostado,
+    // Lotes
+    addLote,
+    updateLote,
+    deleteLote,
+    getLotesByEstado,
+    getOrdenTuesteById,
+    previewConsumoFIFO,
     consumirStockFIFO,
-    getBolsasByEstado,
     // Clientes
     addCliente,
     updateCliente,

@@ -16,7 +16,7 @@ const ESTADO_COLOR = {
 }
 
 export default function MisPedidos() {
-  const { pedidos, getPedidosByCliente } = useData()
+  const { getPedidosByCliente } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
@@ -65,7 +65,7 @@ export default function MisPedidos() {
               </thead>
               <tbody>
                 {misPedidosOrdenados.map(pedido => {
-                  const Icon = ESTADO_ICON[pedido.estado]
+                  const Icon = ESTADO_ICON[pedido.estado] || Clock
                   const badgeColor = ESTADO_COLOR[pedido.estado] === 'warning'
                     ? 'bg-amber-500/10 text-amber-700'
                     : ESTADO_COLOR[pedido.estado] === 'info'
@@ -79,13 +79,13 @@ export default function MisPedidos() {
                           {formatearFechaHora(pedido.fecha)}
                         </p>
                         <p className="text-xs text-[var(--color-text-muted)]">
-                          #{pedido.id.slice(0, 8)}
+                          #{String(pedido.id).slice(0, 8)}
                         </p>
                       </td>
                       <td>
                         {pedido.items.map((item, i) => (
                           <div key={i} className="text-sm">
-                            {item.variedad} ({formatearKilos(item.kilos)})
+                            {item.nombre || item.variedad || 'Café'} ({formatearKilos(item.kilos)})
                           </div>
                         ))}
                       </td>

@@ -6,6 +6,7 @@ import { ToastProvider, Toaster } from './hooks/useToast.jsx'
 import Layout from './components/layout/Layout'
 import LayoutCliente from './components/layout/LayoutCliente'
 import Login from './pages/Login'
+import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Stock from './pages/Stock'
 import Clientes from './pages/Clientes'
@@ -52,7 +53,7 @@ function PublicRoute({ children }) {
   }
   
   if (user) {
-    return <Navigate to="/" replace />
+    return <Navigate to={user.role === 'cliente' ? '/cliente' : '/'} replace />
   }
   
   return children
@@ -64,6 +65,12 @@ function AppRoutes() {
       <Route path="/login" element={
         <PublicRoute>
           <Login />
+        </PublicRoute>
+      } />
+
+      <Route path="/register" element={
+        <PublicRoute>
+          <Register />
         </PublicRoute>
       } />
       

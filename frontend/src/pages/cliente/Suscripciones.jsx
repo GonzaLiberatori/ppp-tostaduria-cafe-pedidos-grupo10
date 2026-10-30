@@ -1,20 +1,21 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useData } from '../../context/DataContext'
 import { useAuth } from '../../context/AuthContext'
 import { FRECUENCIA_SUSCRIPCION, MEDIOS_PAGO } from '../../data/constants'
 import { formatearMoneda, formatearKilos } from '../../utils/formatters'
 import { formatearFecha } from '../../utils/formatters'
+import { nombreCafe, kilosCafe } from '../../utils/cafes'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import { Clock, Coffee, Package, AlertTriangle } from 'lucide-react'
 
 export default function Suscripciones() {
-  const { addPedido, stock } = useData()
+  const { addPedido, cafes } = useData()
   const { user } = useAuth()
 
   const [formData, setFormData] = useState({
-    variedad: '',
+    cafeId: '',
     kilos: '',
     frecuencia: 'semanal',
     medioPago: 'transferencia',
@@ -26,13 +27,14 @@ export default function Suscripciones() {
   const [enviado, setEnviado] = useState(false)
 
   const clienteId = user?.clienteId
-  const clienteTostado = stock.filter(s => s.tipo === 'tostado')
-  const clienteVerde = stock.filter(s => s.tipo === 'verde')
 
-  function getKilosTotales(stockItem) {
-    if (!stockItem.bolsas || !Array.isArray(stockItem.bolsas)) return 0
-    return stockItem.bolsas.reduce((sum, b) => sum + (b.kilos || 0), 0)
-  }
+  // Solo cafés con café tostado disponible para entregas recurrentes
+  const cafesDisponibles = useMemo(
+    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
+    [cafes]
+  )
+
+  const cafeSeleccionado = cafes.find(c => c.id === formData.cafeId)
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -47,7 +49,7 @@ export default function Suscripciones() {
 
   const validate = () => {
     const newErrors = {}
-    if (!formData.variedad) newErrors.variedad = 'Selecciona un tipo de café'
+    if (!formData.cafeId) newErrors.cafeId = 'Selecciona un tipo de café'
     if (!formData.kilos || parseFloat(formData.kilos) <= 0) newErrors.kilos = 'Kilos inválidos'
     if (formData.medioPago === 'transferencia' && !formData.comprobante) {
       newErrors.comprobante = 'Debe adjuntar el comprobante de transferencia'
@@ -62,9 +64,8 @@ export default function Suscripciones() {
 
     setSubmitting(true)
 
-    const stockItem = [...clienteTostado, ...clienteVerde].find(s => s.variedad === formData.variedad)
     const kilos = parseFloat(formData.kilos)
-    const precioKg = stockItem?.precioKg || 0
+    const precioKg = cafeSeleccionado?.precioKg || 0
     const total = kilos * precioKg
 
     const pedido = {
@@ -75,8 +76,8 @@ export default function Suscripciones() {
       comprobanteAdjunto: formData.comprobante ? formData.comprobante.name : null,
       items: [
         {
-          stockId: stockItem?.id || '',
-          variedad: stockItem?.variedad || formData.variedad,
+          cafeId: formData.cafeId,
+          nombre: nombreCafe(cafeSeleccionado),
           kilos,
           precioKg,
         },
@@ -108,7 +109,7 @@ export default function Suscripciones() {
           <div className="grid gap-4 sm:grid-cols-2 text-left">
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Café</p>
-              <p className="font-medium">{formData.variedad}</p>
+              <p className="font-medium">{nombreCafe(cafeSeleccionado) || '—'}</p>
             </div>
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Kilos por entrega</p>
@@ -158,15 +159,15 @@ export default function Suscripciones() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Select
               label="Tipo de café *"
-              name="variedad"
-              value={formData.variedad}
+              name="cafeId"
+              value={formData.cafeId}
               onChange={handleChange}
-              options={[
-                ...clienteTostado.map(s => ({ value: s.variedad, label: `${s.variedad} (Tostado - ${formatearKilos(getKilosTotales(s))} disp.)` })),
-                ...clienteVerde.map(s => ({ value: s.variedad, label: `${s.variedad} (Verde - ${formatearKilos(getKilosTotales(s))} disp.)` })),
-              ]}
+              options={cafesDisponibles.map(cafe => ({
+                value: cafe.id,
+                label: `${nombreCafe(cafe)} (${formatearKilos(kilosCafe(cafe, 'tostado'))} disp.)`,
+              }))}
               placeholder="Seleccionar café"
-              error={errors.variedad}
+              error={errors.cafeId}
             />
             <Input
               label="Kilos por entrega *"
@@ -250,8 +251,8 @@ export default function Suscripciones() {
               <div>
                 <span className="text-[var(--color-text-secondary)]">Total estimado:</span>
                 <span className="font-medium text-[var(--color-text-primary)] ml-2">
-                  {formData.variedad && formData.kilos
-                    ? formatearMoneda(parseFloat(formData.kilos) * ([...clienteTostado, ...clienteVerde].find(s => s.variedad === formData.variedad)?.precioKg || 0))
+                  {formData.cafeId && formData.kilos
+                    ? formatearMoneda(parseFloat(formData.kilos) * (cafeSeleccionado?.precioKg || 0))
                     : formatearMoneda(0)}
                 </span>
               </div>
