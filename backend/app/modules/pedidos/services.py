@@ -271,7 +271,7 @@ class PedidoService:
         page: int = 1,
         page_size: int = 20,
         session: Session = None,
-    ) -> Tuple[List[Pedido], int]:
+    ) -> Tuple[List[dict], int]:
         """Lista pedidos con filtros y paginación."""
         return crud_get_pedidos_con_filtros(
             session,

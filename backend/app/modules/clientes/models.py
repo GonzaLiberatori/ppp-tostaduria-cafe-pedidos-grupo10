@@ -1,9 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, List
 
 from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Numeric, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -21,6 +21,13 @@ class Cliente(Base):
     email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     direccion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    pedidos: Mapped[List["Pedido"]] = relationship(
+        "Pedido",
+        back_populates="cliente",
+        lazy="selectin",
+    )
 
     def __repr__(self) -> str:
         return f"<Cliente(id={self.id}, nombre={self.nombre}, tipo={self.tipo})>"

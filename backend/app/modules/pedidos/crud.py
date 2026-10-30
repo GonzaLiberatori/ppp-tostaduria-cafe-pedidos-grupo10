@@ -78,6 +78,25 @@ def get_pedido_by_idempotency_key(db: Session, idempotency_key: str) -> Optional
     return db.execute(stmt).scalar_one_or_none()
 
 
+from app.modules.clientes.models import Cliente
+
+
+def _pedido_to_list_read(pedido: Pedido) -> dict:
+    """Convierte un Pedido a dict compatible con PedidoListRead."""
+    items = getattr(pedido, 'items', [])
+    return {
+        "id": pedido.id,
+        "fecha": pedido.fecha,
+        "cliente_id": pedido.cliente_id,
+        "cliente_nombre": pedido.cliente.nombre if pedido.cliente else "Desconocido",
+        "estado": pedido.estado,
+        "items_count": len(items),
+        "kilos_totales": sum(item.kilos for item in items),
+        "total": pedido.total,
+        "medio_contacto": pedido.medio_contacto,
+    }
+
+
 def get_pedidos_con_filtros(
     db: Session,
     *,
@@ -88,11 +107,14 @@ def get_pedidos_con_filtros(
     search: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
-) -> Tuple[List[Pedido], int]:
+) -> Tuple[List[dict], int]:
     """Lista pedidos con filtros y paginación."""
     stmt = (
         select(Pedido)
-        .options(selectinload(Pedido.items))
+        .options(
+            selectinload(Pedido.items),
+            selectinload(Pedido.cliente)
+        )
         .order_by(desc(Pedido.fecha))
     )
 
@@ -126,7 +148,7 @@ def get_pedidos_con_filtros(
     stmt = stmt.offset(offset).limit(page_size)
 
     pedidos = db.execute(stmt).scalars().all()
-    return list(pedidos), total
+    return [_pedido_to_list_read(p) for p in pedidos], total
 
 
 def update_pedido(

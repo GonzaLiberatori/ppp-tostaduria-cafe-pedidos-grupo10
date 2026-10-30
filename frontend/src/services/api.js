@@ -14,6 +14,51 @@ class ApiError extends Error {
   }
 }
 
+// snake_case <-> camelCase transformers
+function toCamelCase(str) {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+function toSnakeCase(str) {
+  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+// WeakMap cache para evitar transformar el mismo objeto múltiples veces
+const transformCache = new WeakMap();
+
+function transformKeys(obj, transformer) {
+  // Solo transformar plain objects y arrays
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+  
+  // No transformar: Date, RegExp, Error, File, Blob, etc.
+  if (obj instanceof Date || obj instanceof RegExp || obj instanceof Error) return obj;
+  
+  // Cache por identidad del objeto
+  const cacheKey = transformer === toCamelCase ? 'camel' : 'snake';
+  if (!transformCache.has(obj)) {
+    transformCache.set(obj, new Map());
+  }
+  const objCache = transformCache.get(obj);
+  if (objCache.has(cacheKey)) {
+    return objCache.get(cacheKey);
+  }
+  
+  let result;
+  if (Array.isArray(obj)) {
+    result = obj.map(item => transformKeys(item, transformer));
+  } else {
+    result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        result[transformer(key)] = transformKeys(value, transformer);
+      }
+    }
+  }
+  
+  objCache.set(cacheKey, result);
+  return result;
+}
+
 async function request(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
   
@@ -29,7 +74,7 @@ async function request(endpoint, options = {}) {
   };
 
   if (options.body && typeof options.body === 'object') {
-    config.body = JSON.stringify(options.body);
+    config.body = JSON.stringify(transformKeys(options.body, toSnakeCase));
   }
 
   try {
@@ -53,7 +98,8 @@ async function request(endpoint, options = {}) {
       );
     }
 
-    return data;
+    // Transform snake_case response to camelCase for frontend
+    return transformKeys(data, toCamelCase);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     

@@ -89,7 +89,11 @@ class Pedido(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    # cliente relationship will be added when Cliente model exists (string FK is defined on column)
+    cliente: Mapped["Cliente"] = relationship(
+        "Cliente",
+        back_populates="pedidos",
+        lazy="selectin",
+    )
 
     __table_args__ = (
         CheckConstraint("total >= 0", name="ck_pedidos_total_non_negative"),

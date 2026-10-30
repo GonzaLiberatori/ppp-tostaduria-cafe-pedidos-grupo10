@@ -258,7 +258,7 @@ PEDIDOS_DEMO = [
     {
         "id": 1,
         "fecha": "2026-02-10T10:00:00",
-        "estado": "Entregado",
+        "estado": "ENTREGADO",
         "cliente_id": 1,
         "items": [
             {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("20"), "precio_kg": Decimal("18500")},
@@ -271,7 +271,7 @@ PEDIDOS_DEMO = [
     {
         "id": 2,
         "fecha": "2026-02-12T10:00:00",
-        "estado": "Listo",
+        "estado": "LISTO",
         "cliente_id": 2,
         "items": [
             {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("50"), "precio_kg": Decimal("18500")},
@@ -284,7 +284,7 @@ PEDIDOS_DEMO = [
     {
         "id": 3,
         "fecha": "2026-02-14T10:00:00",
-        "estado": "Pendiente",
+        "estado": "PENDIENTE",
         "cliente_id": 3,
         "items": [
             {"stock_id": 5, "variedad": "Blend Casa - Tueste Oscuro", "kilos": Decimal("2"), "precio_kg": Decimal("16200")},
@@ -297,7 +297,7 @@ PEDIDOS_DEMO = [
     {
         "id": 4,
         "fecha": "2026-02-15T10:00:00",
-        "estado": "Pendiente",
+        "estado": "PENDIENTE",
         "cliente_id": 4,
         "items": [
             {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("40"), "precio_kg": Decimal("18500")},
@@ -309,7 +309,7 @@ PEDIDOS_DEMO = [
     {
         "id": 5,
         "fecha": "2026-02-16T10:00:00",
-        "estado": "Entregado",
+        "estado": "ENTREGADO",
         "cliente_id": 5,
         "items": [
             {"stock_id": 5, "variedad": "Blend Casa - Tueste Oscuro", "kilos": Decimal("1"), "precio_kg": Decimal("16200")},
@@ -481,7 +481,7 @@ def seed(database_url: str = None):
                 """), {'id': hist_id, 'pid': p['id'], 'estado': p['estado'], 'ts': p['fecha']})
                 
                 # Si entregado y B2B, actualizar deuda cliente
-                if p['estado'] == 'Entregado':
+                if p['estado'] == 'ENTREGADO':
                     cliente = next((c for c in CLIENTES_DEMO if c['id'] == p['cliente_id']), None)
                     if cliente and cliente['tipo'] == 'B2B':
                         conn.execute(text("""
