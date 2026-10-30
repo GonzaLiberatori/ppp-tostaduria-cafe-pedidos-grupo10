@@ -116,17 +116,3 @@ El modelo `Cliente` DEBE tener:
 #### Scenario: Cliente Consumidor Final no afecta cuenta corriente
 - **WHEN** pedido de cliente Consumidor Final cambia estado
 - **THEN** NO modifica `saldo_cuenta_corriente`
-
-## MODIFIED Requirements
-
-### Requirement: Modelo Pedido existente
-Se MODIFICA para agregar:
-- `idempotency_key` (String(64), UNIQUE, nullable, indexado)
-- `medio_contacto` (String(50), nullable)
-- `observaciones` (Text, nullable)
-- Relación `historial_estados` con `PedidoEstadoHistorial`
-
-### Requirement: Modelo Cliente existente
-Se MODIFICA para agregar:
-- `saldo_cuenta_corriente` (Numeric(12,2), default 0)
-- `es_b2b` (Boolean, computed: tipo == 'Mayorista')

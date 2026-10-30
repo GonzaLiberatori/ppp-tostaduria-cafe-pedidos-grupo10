@@ -13,6 +13,7 @@ from app.modules.clientes.router import router as clientes_router
 from app.modules.gastos.router import router as gastos_router
 from app.modules.inventario.router import router as inventario_router
 from app.modules.pedidos.router import router as pedidos_router
+from app.modules.ventas.router import router as ventas_router
 
 # ---------------------------------------------------------------------------
 # Instancia de FastAPI
@@ -41,6 +42,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(pedidos_router, prefix=settings.API_V1_STR)
+app.include_router(ventas_router, prefix=settings.API_V1_STR)
 app.include_router(clientes_router, prefix=settings.API_V1_STR)
 app.include_router(gastos_router, prefix=settings.API_V1_STR)
 app.include_router(

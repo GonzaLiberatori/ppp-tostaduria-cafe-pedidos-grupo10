@@ -26,6 +26,7 @@ from app.modules.gastos import models as gastos_models  # noqa: E402, F401
 from app.modules.inventario import models as inventario_models  # noqa: E402, F401
 from app.modules.pedidos import models as pedidos_models  # noqa: E402, F401
 from app.modules.produccion import models as produccion_models  # noqa: E402, F401
+from app.modules.ventas import models as ventas_models  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Configuración de logging desde alembic.ini
