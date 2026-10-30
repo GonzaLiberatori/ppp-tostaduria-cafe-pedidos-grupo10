@@ -3,7 +3,17 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -60,6 +70,10 @@ class Lote(Base):
     __tablename__ = "lote"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)  # MEDIUMINT UNSIGNED compatible
+    codigo_lote: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    fecha_ingreso: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
     tipo: Mapped[LoteTipo] = mapped_column(
         Enum(LoteTipo, values_callable=lambda e: [m.value for m in e], native_enum=True, name="lote_tipo_enum"),
         nullable=False,

@@ -1,6 +1,6 @@
 import { useData } from '../../context/DataContext'
 import { useAuth } from '../../context/AuthContext'
-import { formatearMoneda, formatearKilos, formatearFecha } from '../../utils/formatters'
+import { formatearMoneda, formatearKilos } from '../../utils/formatters'
 import { ShoppingCart, Clock, CheckCircle, Package } from 'lucide-react'
 
 const ESTADO_ICON = {
@@ -16,7 +16,7 @@ const ESTADO_COLOR = {
 }
 
 export default function MisPedidos() {
-  const { pedidos, getPedidosByCliente } = useData()
+  const { getPedidosByCliente } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
@@ -60,7 +60,7 @@ export default function MisPedidos() {
                   <th scope="col" className="text-right">Kilos</th>
                   <th scope="col" className="text-right">Total</th>
                   <th scope="col">Estado</th>
-                  <th scope="col">Medio de pago</th>
+                  <th scope="col">Medio de contacto</th>
                 </tr>
               </thead>
               <tbody>
@@ -101,7 +101,7 @@ export default function MisPedidos() {
                           {pedido.estado}
                         </span>
                       </td>
-                      <td>{pedido.medioPago || '—'}</td>
+                      <td>{pedido.medioContacto || '—'}</td>
                     </tr>
                   )
                 })}

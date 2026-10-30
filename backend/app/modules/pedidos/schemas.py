@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
@@ -206,7 +206,7 @@ class PedidoBase(BaseModel):
     estado: str  # PENDIENTE, LISTO, ENTREGADO
     total: Decimal
     cliente_persona_id: int
-    empleado_persona_id: int
+    empleado_persona_id: Optional[int] = None
 
 
 class PedidoCreate(BaseModel):
@@ -218,7 +218,7 @@ class PedidoCreate(BaseModel):
     medio_contacto: Optional[str] = None
     observaciones: Optional[str] = None
     cliente_persona_id: int
-    empleado_persona_id: int
+    empleado_persona_id: Optional[int] = None
     detalles: List[DetallePedidoCreate]
 
     @field_validator('detalles')
@@ -261,7 +261,7 @@ class PedidoDetailRead(BaseModel):
     medio_contacto: Optional[str] = None
     observaciones: Optional[str] = None
     cliente_persona_id: int
-    empleado_persona_id: int
+    empleado_persona_id: Optional[int] = None
     detalles: List[DetallePedidoResponse] = []
     cliente: Optional["ClienteResponse"] = None
     historial_estados: List["PedidoEstadoHistorialRead"] = []
@@ -293,7 +293,7 @@ class PedidoResponse(BaseModel):
     medio_contacto: Optional[str] = None
     observaciones: Optional[str] = None
     cliente_persona_id: int
-    empleado_persona_id: int
+    empleado_persona_id: Optional[int] = None
     detalles: List["DetallePedidoResponse"] = []
     cliente: Optional["ClienteResponse"] = None
 
@@ -355,7 +355,7 @@ class PedidoDetailRead(BaseModel):
     medio_contacto: Optional[str] = None
     observaciones: Optional[str] = None
     cliente_persona_id: int
-    empleado_persona_id: int
+    empleado_persona_id: Optional[int] = None
     detalles: List["DetallePedidoResponse"] = []
     cliente: Optional["ClienteResponse"] = None
     historial_estados: List["PedidoEstadoHistorialRead"] = []
@@ -382,3 +382,66 @@ ClienteResponse.model_rebuild()
 EmpleadoResponse.model_rebuild()
 PedidoCreate.model_rebuild()
 PedidoResponse.model_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Contratos planos del panel de pedidos
+# ---------------------------------------------------------------------------
+class PedidoPanelItem(BaseModel):
+    """Ítem enviado por el panel. El precio lo calcula el backend."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    stockId: str
+    kilos: Decimal = Field(gt=0)
+    precioKg: Optional[Decimal] = None
+    variedad: Optional[str] = None
+
+
+class PedidoPanelCreate(BaseModel):
+    """Alta de pedido desde el panel."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    clienteId: str
+    estado: str = "Pendiente"
+    medioContacto: str = "WhatsApp"
+    observaciones: str = ""
+    items: List[PedidoPanelItem] = Field(min_length=1)
+    total: Optional[Decimal] = None
+
+
+class PedidoPanelUpdate(BaseModel):
+    """Edición parcial de pedido desde el panel."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    clienteId: Optional[str] = None
+    estado: Optional[str] = None
+    medioContacto: Optional[str] = None
+    observaciones: Optional[str] = None
+    items: Optional[List[PedidoPanelItem]] = None
+
+
+class PedidoPanelItemRead(BaseModel):
+    """Ítem de pedido tal como lo consume el panel."""
+
+    stockId: str
+    variedad: str
+    kilos: float
+    precioKg: float
+    subtotal: float
+
+
+class PedidoPanelRead(BaseModel):
+    """Pedido tal como lo consume el panel."""
+
+    id: str
+    fecha: datetime
+    estado: str
+    clienteId: str
+    clienteNombre: str
+    items: List[PedidoPanelItemRead]
+    medioContacto: str = ""
+    observaciones: str = ""
+    total: float

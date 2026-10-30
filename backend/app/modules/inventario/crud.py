@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from decimal import Decimal
 
+from datetime import datetime
+
 from app.modules.inventario.models import (
     Blend,
     BlendHasTipoDeCafe,
@@ -221,6 +223,8 @@ def crear_lote(db: Session, datos: LoteCreate, kg_disponibles: Decimal) -> Lote:
     de dónde sale ese número, solo lo persiste.
     """
     lote = Lote(
+        codigo_lote=datos.codigo_lote,
+        fecha_ingreso=datetime.utcnow(),
         tipo=datos.tipo,
         estado=datos.estado,
         fecha_vencimiento=datos.fecha_vencimiento,

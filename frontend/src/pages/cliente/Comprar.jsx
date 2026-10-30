@@ -2,44 +2,36 @@ import { useState, useMemo, useCallback } from 'react'
 import { useData } from '../../context/DataContext'
 import { useAuth } from '../../context/AuthContext'
 import { MEDIOS_PAGO } from '../../data/constants'
-import { formatearMoneda, formatearKilos, formatearFecha } from '../../utils/formatters'
-import { calcularTotalPedido, calcularKilosTotales } from '../../utils/calculations'
+import { formatearMoneda, formatearKilos } from '../../utils/formatters'
+import { calcularTotalPedido } from '../../utils/calculations'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import Badge from '../../components/ui/Badge'
-import { ShoppingCart, Coffee, Package, AlertTriangle, CreditCard, DollarSign, Upload, Clock } from 'lucide-react'
+import { ShoppingCart, Coffee, Package, AlertTriangle, DollarSign, Clock } from 'lucide-react'
 
 export default function Comprar() {
-  const { stock, addPedido, getTotalKilosStock } = useData()
+  const { stock, addPedido, kilosDeStock } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
 
-  // Solo café disponible (con kilos > 0)
-  const stockDisponible = useMemo(() => {
-    return stock.filter(s => {
-      const kilos = calcKilosTotales(s)
-      return kilos > 0
-    })
-  }, [stock])
+  // Solo café tostado disponible (con kilos > 0)
+  const stockDisponible = useMemo(
+    () => stock.filter(item => item.tipo === 'tostado' && kilosDeStock(item) > 0),
+    [stock, kilosDeStock],
+  )
 
   const [formData, setFormData] = useState({
     items: [{ stockId: '', kilos: '' }],
     medioPago: 'transferencia',
-    comprobante: null,
-    ticket: null,
     observaciones: '',
   })
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
   const [enviado, setEnviado] = useState(false)
   const [stockAlert, setStockAlert] = useState(null) // { stockId, mensaje }
-
-  function getKilosTotales(stockItem) {
-    if (!stockItem.bolsas || !Array.isArray(stockItem.bolsas)) return 0
-    return stockItem.bolsas.reduce((sum, b) => sum + (b.kilos || 0), 0)
-  }
 
   const handleItemChange = (index, name, value) => {
     setFormData(prev => ({
@@ -72,21 +64,20 @@ export default function Comprar() {
     }))
   }
 
-  const handleFileChange = (field, e) => {
-    setFormData(prev => ({ ...prev, [field]: e.target.files?.[0] || null }))
-    if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }))
-  }
-
   const validate = useCallback(() => {
     const newErrors = {}
     let hayValido = false
+
+    if (!clienteId) {
+      newErrors.cliente = 'La cuenta no está vinculada a un cliente.'
+    }
 
     formData.items.forEach((item, index) => {
       if (!item.stockId) {
         newErrors[`item${index}_stock`] = 'Selecciona un tipo de café'
       } else {
         const stockItem = stock.find(s => s.id === item.stockId)
-        const disponible = stockItem ? getKilosTotales(stockItem) : 0
+        const disponible = stockItem ? kilosDeStock(stockItem) : 0
         if (!item.kilos || parseFloat(item.kilos) <= 0) {
           newErrors[`item${index}_kilos`] = 'Cantidad inválida'
         } else if (parseFloat(item.kilos) > disponible + 0.001) {
@@ -102,53 +93,47 @@ export default function Comprar() {
       newErrors.items = 'Agrega al menos un producto con stock disponible'
     }
 
-    if (formData.medioPago === 'transferencia' && !formData.comprobante) {
-      newErrors.comprobante = 'Debe adjuntar el comprobante de transferencia'
-    }
-
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
-  }, [formData, stock, formatearKilos])
+  }, [clienteId, formData, stock, formatearKilos])
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!validate()) return
 
     setSubmitting(true)
+    setSubmitError('')
 
     const items = formData.items
       .filter(item => item.stockId && item.kilos && parseFloat(item.kilos) > 0)
-      .map(item => {
-        const stockItem = stock.find(s => s.id === item.stockId)
-        return {
-          stockId: item.stockId,
-          variedad: stockItem?.variedad || '',
-          kilos: parseFloat(item.kilos),
-          precioKg: stockItem?.precioKg || 0,
-        }
-      })
+      .map(item => ({
+        stockId: item.stockId,
+        kilos: parseFloat(item.kilos),
+      }))
 
-    const total = calcularTotalPedido(items)
+    const medioPago = MEDIOS_PAGO.find(opcion => opcion.value === formData.medioPago)
+    const notas = formData.observaciones.trim()
+    const observaciones = [
+      `Pago: ${medioPago?.label || formData.medioPago}`,
+      notas,
+    ].filter(Boolean).join(' | ')
 
     const pedido = {
-      clienteId: clienteId || '',
-      fecha: new Date().toISOString(),
+      clienteId: String(clienteId),
       estado: 'Pendiente',
-      medioPago: formData.medioPago,
-      comprobanteAdjunto: formData.medioPago === 'transferencia' && formData.comprobante
-        ? formData.comprobante.name
-        : formData.medioPago === 'efectivo' && formData.ticket
-          ? formData.ticket.name
-          : null,
+      medioContacto: 'Email',
+      observaciones,
       items,
-      total,
-      observaciones: formData.observaciones.trim(),
-      reservado: true, // stock no descontado hasta aprobación admin
     }
 
-    addPedido(pedido)
-    setSubmitting(false)
-    setEnviado(true)
+    try {
+      await addPedido(pedido)
+      setEnviado(true)
+    } catch (err) {
+      setSubmitError(err.message || 'No se pudo registrar el pedido')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const totalKilos = useMemo(() =>
@@ -165,6 +150,18 @@ export default function Comprar() {
     return calcularTotalPedido(itemsValidos)
   }, [formData.items, stock])
 
+  const reiniciarCompra = () => {
+    setFormData({
+      items: [{ stockId: '', kilos: '' }],
+      medioPago: 'transferencia',
+      observaciones: '',
+    })
+    setErrors({})
+    setSubmitError('')
+    setStockAlert(null)
+    setEnviado(false)
+  }
+
   if (enviado) {
     return (
       <div className="space-y-6">
@@ -176,7 +173,7 @@ export default function Comprar() {
           <Package className="w-12 h-12 text-green-500 mx-auto mb-4" />
           <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-2">Pedido enviado</h2>
           <p className="text-[var(--color-text-muted)] mb-6">
-            El stock no se descuenta hasta que la venta se concrete desde el panel de administración.
+            El pedido fue registrado y el stock quedó reservado en el inventario.
           </p>
           <div className="grid gap-4 sm:grid-cols-2 text-left">
             <div>
@@ -189,14 +186,16 @@ export default function Comprar() {
             </div>
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Medio de pago</p>
-              <p className="font-medium">{formData.medioPago}</p>
+              <p className="font-medium">
+                {MEDIOS_PAGO.find(opcion => opcion.value === formData.medioPago)?.label}
+              </p>
             </div>
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Estado</p>
               <p className="font-medium text-amber-700">Pendiente</p>
             </div>
           </div>
-          <Button onClick={() => setEnviado(false)}>Nueva compra</Button>
+          <Button onClick={reiniciarCompra}>Nueva compra</Button>
         </div>
       </div>
     )
@@ -207,7 +206,7 @@ export default function Comprar() {
       <div>
         <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Comprar café</h1>
         <p className="text-[var(--color-text-muted)]">
-          Selecciona el tipo de café y la cantidad en kilos. El stock se muestra en kilos totales disponibles.
+          Selecciona el café tostado y la cantidad en kilos. El stock se muestra en kilos totales disponibles.
         </p>
       </div>
 
@@ -225,7 +224,7 @@ export default function Comprar() {
         <div className="card-body p-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {stockDisponible.map(item => {
-              const kilos = getKilosTotales(item)
+              const kilos = kilosDeStock(item)
               const esTostado = item.tipo === 'tostado'
               return (
                 <div key={item.id} className="border border-[var(--color-border)] rounded-lg p-4 bg-[var(--color-bg-secondary)]">
@@ -290,7 +289,7 @@ export default function Comprar() {
             <div className="space-y-3">
               {formData.items.map((item, index) => {
                 const stockItem = stock.find(s => s.id === item.stockId)
-                const disponible = stockItem ? getKilosTotales(stockItem) : 0
+                const disponible = stockItem ? kilosDeStock(stockItem) : 0
                 return (
                   <div key={index} className="grid gap-3 sm:grid-cols-[1fr_120px_auto] items-end p-3 bg-[var(--color-bg-secondary)] rounded-lg border border-[var(--color-border)]/50">
                     <Select
@@ -299,7 +298,7 @@ export default function Comprar() {
                       onChange={e => handleItemChange(index, 'stockId', e.target.value)}
                       options={stockDisponible.map(s => ({
                         value: s.id,
-                        label: `${s.variedad} (${formatearKilos(getKilosTotales(s))} disp.)`,
+                        label: `${s.variedad} (${formatearKilos(kilosDeStock(s))} disp.)`,
                       }))}
                       placeholder="Seleccionar café"
                       error={errors[`item${index}_stock`]}
@@ -362,89 +361,13 @@ export default function Comprar() {
               label="Selecciona cómo pagar *"
               name="medioPago"
               value={formData.medioPago}
-              onChange={e => {
-                setFormData(prev => ({ ...prev, medioPago: e.target.value }))
-                if (errors.comprobante) setErrors(prev => ({ ...prev, comprobante: '' }))
-                if (errors.ticket) setErrors(prev => ({ ...prev, ticket: '' }))
-              }}
+              onChange={e => setFormData(prev => ({ ...prev, medioPago: e.target.value }))}
               options={MEDIOS_PAGO}
-              error={errors.comprobante || errors.ticket}
             />
-
-            {formData.medioPago === 'transferencia' && (
-              <div className="mt-4 border border-amber-500/20 bg-amber-500/5 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Upload className="w-4 h-4 text-amber-600" />
-                  <span className="font-medium text-amber-800">Comprobante de transferencia (obligatorio)</span>
-                </div>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => handleFileChange('comprobante', e)}
-                  className="block w-full text-sm text-[var(--color-text-muted)] file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-coffee-500 file:text-white hover:file:bg-coffee-600"
-                />
-                <p className="mt-2 text-xs text-amber-700">
-                  Adjunta el comprobante de tu transferencia bancaria. Sin él no se puede enviar el pedido.
-                </p>
-                {errors.comprobante && <p className="mt-1 text-sm text-red-600">{errors.comprobante}</p>}
-              </div>
-            )}
-
-            {formData.medioPago === 'tarjeta' && (
-              <div className="mt-4 border border-blue-500/20 bg-blue-500/5 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <CreditCard className="w-4 h-4 text-blue-600" />
-                  <span className="font-medium text-blue-800">Tarjeta de crédito/débito</span>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Input
-                    placeholder="Número de tarjeta"
-                    value=""
-                    onChange={() => {}}
-                    disabled
-                    className="bg-[var(--color-bg-secondary)]"
-                    label=""
-                  />
-                  <Input
-                    placeholder="Vencimiento (MM/AA)"
-                    value=""
-                    onChange={() => {}}
-                    disabled
-                    className="bg-[var(--color-bg-secondary)]"
-                    label=""
-                  />
-                </div>
-                <Input
-                  placeholder="CVV"
-                  value=""
-                  onChange={() => {}}
-                  disabled
-                  className="bg-[var(--color-bg-secondary)]"
-                  label=""
-                />
-                <p className="mt-2 text-xs text-blue-700">
-                  Los campos de tarjeta son solo informativos. No se procesa ningún pago en este momento.
-                </p>
-              </div>
-            )}
-
-            {formData.medioPago === 'efectivo' && (
-              <div className="mt-4 border border-blue-500/20 bg-blue-500/5 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Upload className="w-4 h-4 text-blue-600" />
-                  <span className="font-medium text-blue-800">Ticket de pago (opcional)</span>
-                </div>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => handleFileChange('ticket', e)}
-                  className="block w-full text-sm text-[var(--color-text-muted)] file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-coffee-500 file:text-white hover:file:bg-coffee-600"
-                />
-                <p className="mt-2 text-xs text-blue-700">
-                  Puedes adjuntar el ticket si lo deseas, pero no es obligatorio para pagar en efectivo.
-                </p>
-              </div>
-            )}
+            <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+              El medio de pago queda registrado en las observaciones del pedido.
+              La administración coordina el cobro y la entrega.
+            </p>
           </div>
 
           <Input
@@ -478,9 +401,17 @@ export default function Comprar() {
               </div>
             </div>
             <p className="text-xs text-[var(--color-text-muted)] mt-3">
-              El stock se reserva pero no se descuenta hasta que la administración concrete la venta.
+              El pedido queda pendiente hasta que la administración confirme la entrega.
+              El precio final lo calcula el sistema con el catálogo vigente.
             </p>
           </div>
+
+          {errors.cliente && (
+            <p className="form-error" role="alert">{errors.cliente}</p>
+          )}
+          {submitError && (
+            <p className="form-error" role="alert">{submitError}</p>
+          )}
 
           <Button type="submit" variant="primary" loading={submitting} className="w-full py-3 mt-4">
             <Clock className="w-4 h-4 mr-2" />

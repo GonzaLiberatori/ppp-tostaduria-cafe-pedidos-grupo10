@@ -1,15 +1,13 @@
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { useState } from 'react'
-import { ShoppingCart, List, User, Clock } from 'lucide-react'
+import { ShoppingCart, List, User, Clock, Coffee, LogOut } from 'lucide-react'
 
 export default function LayoutCliente() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState('/cliente')
+  const { pathname: activeTab } = useLocation()
 
   const handleTabChange = (path) => {
-    setActiveTab(path)
     navigate(path)
   }
 
@@ -20,44 +18,44 @@ export default function LayoutCliente() {
 
   return (
     <div className="min-h-screen bg-[var(--color-bg-primary)]">
-      <!-- Top tabs bar -->
+      {/* Top tabs bar */}
       <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex">
           <button
-            onClick={() => setActiveTab('/cliente'), className={activeTab === '/cliente' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}}
-            className="flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg"
+            onClick={() => handleTabChange('/cliente')}
+            className={`flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg ${activeTab === '/cliente' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}`}
             aria-label="Resumen"
           >
             <ShoppingCart className="w-4 h-4 mr-2" />
             Resumen
           </button>
           <button
-            onClick={() => setActiveTab('/cliente/comprar'), className={activeTab === '/cliente/comprar' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}}
-            className="flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg"
+            onClick={() => handleTabChange('/cliente/comprar')}
+            className={`flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg ${activeTab === '/cliente/comprar' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}`}
             aria-label="Comprar"
           >
             <Coffee className="w-4 h-4 mr-2" />
             Comprar
           </button>
           <button
-            onClick={() => setActiveTab('/cliente/mis-pedidos'), className={activeTab === '/cliente/mis-pedidos' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}}
-            className="flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg"
+            onClick={() => handleTabChange('/cliente/mis-pedidos')}
+            className={`flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg ${activeTab === '/cliente/mis-pedidos' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}`}
             aria-label="Mis pedidos"
           >
             <List className="w-4 h-4 mr-2" />
             Mis pedidos
           </button>
           <button
-            onClick={() => setActiveTab('/cliente/perfil'), className={activeTab === '/cliente/perfil' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}}
-            className="flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg"
+            onClick={() => handleTabChange('/cliente/perfil')}
+            className={`flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg ${activeTab === '/cliente/perfil' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}`}
             aria-label="Perfil"
           >
             <User className="w-4 h-4 mr-2" />
             Perfil
           </button>
           <button
-            onClick={() => setActiveTab('/cliente/suscripciones'), className={activeTab === '/cliente/suscripciones' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}}
-            className="flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg"
+            onClick={() => handleTabChange('/cliente/suscripciones')}
+            className={`flex-1 py-3 text-sm font-medium transition-colors rounded-t-lg ${activeTab === '/cliente/suscripciones' ? 'bg-coffee-500 text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]'}`}
             aria-label="Suscripciones"
           >
             <Clock className="w-4 h-4 mr-2" />

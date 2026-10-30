@@ -1,16 +1,70 @@
+import { useEffect, useState } from 'react'
 import { formatearKilos } from '../../utils/formatters'
 import { ESTADO_BOLSA_COLORS } from '../../data/constants'
+import { useToast } from '../../hooks/useToast.jsx'
 import Badge from '../ui/Badge'
 
-export default function BolsaCard({ 
-  bolsa, 
-  onUpdateKilos, 
-  onToggleEstado, 
+export default function BolsaCard({
+  bolsa,
+  onUpdateKilos,
+  onToggleEstado,
   onDelete,
   editable = false,
-  index 
+  index,
 }) {
   const isAbierta = bolsa.estado === 'abierta'
+  const { success, error } = useToast()
+  const [kilosInput, setKilosInput] = useState(String(bolsa.kilos ?? ''))
+
+  useEffect(() => {
+    setKilosInput(String(bolsa.kilos ?? ''))
+  }, [bolsa.id, bolsa.kilos])
+
+  const confirmarKilos = async () => {
+    const kilos = Number(kilosInput)
+
+    if (!Number.isFinite(kilos) || kilos < 0) {
+      setKilosInput(String(bolsa.kilos ?? ''))
+      error('Los kilos deben ser un número mayor o igual a 0')
+      return
+    }
+
+    if (kilos === Number(bolsa.kilos)) return
+
+    try {
+      await onUpdateKilos(bolsa.id, kilos)
+      success('Kilos de la bolsa actualizados')
+    } catch (err) {
+      setKilosInput(String(bolsa.kilos ?? ''))
+      error(err.message || 'No se pudieron actualizar los kilos')
+    }
+  }
+
+  const vaciarBolsa = async () => {
+    try {
+      await onUpdateKilos(bolsa.id, 0)
+      setKilosInput('0')
+      success('Bolsa vaciada')
+    } catch (err) {
+      error(err.message || 'No se pudo vaciar la bolsa')
+    }
+  }
+
+  const cambiarEstado = async () => {
+    try {
+      await onToggleEstado(bolsa.id)
+    } catch (err) {
+      error(err.message || 'No se pudo cambiar el estado de la bolsa')
+    }
+  }
+
+  const eliminarBolsa = async () => {
+    try {
+      await onDelete(bolsa.id)
+    } catch (err) {
+      error(err.message || 'No se pudo eliminar la bolsa')
+    }
+  }
 
   return (
     <div className={`relative bg-[var(--color-bg-secondary)] border rounded-xl p-4 transition-all ${isAbierta ? 'border-amber-500/30 bg-amber-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
@@ -24,20 +78,22 @@ export default function BolsaCard({
                 {bolsa.estado === 'cerrada' ? 'Cerrada' : 'Abierta'}
               </Badge>
             </div>
-            <p className="text-xs text-[var(--color-text-muted)] truncate">Creada: {new Date(bolsa.fechaCreacion).toLocaleDateString('es-AR')}</p>
+            <p className="text-xs text-[var(--color-text-muted)] truncate">
+              Creada: {new Date(bolsa.fechaCreacion).toLocaleDateString('es-AR')}
+            </p>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-2">
           <div className="text-right min-w-[80px]">
             <p className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">{formatearKilos(bolsa.kilos)}</p>
             <p className="text-xs text-[var(--color-text-muted)]">disponibles</p>
           </div>
-          
+
           {editable && (
             <div className="flex items-center gap-1">
               <button
-                onClick={() => onToggleEstado(bolsa.id)}
+                onClick={cambiarEstado}
                 className="btn-ghost btn-sm p-1.5 rounded-lg"
                 title={isAbierta ? 'Marcar como cerrada' : 'Marcar como abierta'}
               >
@@ -48,7 +104,7 @@ export default function BolsaCard({
                 )}
               </button>
               <button
-                onClick={() => onDelete(bolsa.id)}
+                onClick={eliminarBolsa}
                 className="btn-ghost btn-sm p-1.5 rounded-lg text-red-500 hover:bg-red-500/10"
                 title="Eliminar bolsa"
               >
@@ -67,12 +123,20 @@ export default function BolsaCard({
               type="number"
               step="0.01"
               min="0"
-              value={bolsa.kilos}
-              onChange={e => onUpdateKilos(bolsa.id, parseFloat(e.target.value) || 0)}
+              value={kilosInput}
+              onChange={e => setKilosInput(e.target.value)}
+              onBlur={confirmarKilos}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  e.currentTarget.blur()
+                }
+              }}
               className="input flex-1 text-center font-mono"
+              aria-label={`Kilos disponibles de ${bolsa.loteRef || `bolsa ${index + 1}`}`}
             />
             <button
-              onClick={() => onUpdateKilos(bolsa.id, 0)}
+              onClick={vaciarBolsa}
               className="btn-ghost btn-sm px-3 text-red-500 hover:bg-red-500/10"
               title="Vaciar bolsa"
             >

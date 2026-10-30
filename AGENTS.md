@@ -4,7 +4,7 @@
 - **Frontend:** React (SPA)
 - **Backend:** Python con FastAPI (API RESTful asíncrona)
 - **Capa de Datos:** SQLAlchemy (ORM)
-- **Base de Datos:** MySQL
+- **Base de Datos:** SQLite (archivo local, sin servidor de base de datos)
 - **Automatización:** Sistema de tareas programadas (ej. APScheduler) para envíos agendados.
 
 ## Módulos Principales (Alcance del MVP 1)

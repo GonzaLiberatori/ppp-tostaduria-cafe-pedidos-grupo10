@@ -1,512 +1,621 @@
 #!/usr/bin/env python
+"""Puebla la base con datos de demo reproducibles.
+
+El script es idempotente: cada entidad se busca por su clave natural (correo,
+código de lote, clave de idempotencia del pedido o combinación de gasto) y solo
+se crea si no existe. Correrlo dos veces no duplica filas ni pisa consumos de
+stock.
+
+Uso:
+    python scripts/seed_demo.py
+
+Las credenciales de acceso quedan documentadas en ``CUENTAS_DEMO``. El panel
+trabaja con contratos planos, así que el stock de café tostado usa el precio
+base del catálogo (``precio_por_kg_verde``): el modelo guarda un único precio
+por origen y el panel lo muestra tanto en verde como en tostado.
 """
-Seed script para poblar la BD con datos de demo (basados en mockData.js).
-Ejecutar: python backend/scripts/seed_demo.py
-"""
-import sys
+
 import os
+import sys
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from datetime import datetime, date
+from typing import Any, Optional
 
-# Agregar path del backend
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Agregar la raíz del backend al path para poder ejecutar el script directo.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.database import Base
+from app.core.database import SessionLocal, engine
 from app.core.security import get_password_hash
+from app.modules.auth.models import Cuenta, UserRole
+from app.modules.clientes.models import Cliente, Empleado, Persona, TipoCliente
+from app.modules.gastos.models import Gasto
+from app.modules.inventario.models import (
+    Blend,
+    BlendHasTipoDeCafe,
+    Lote,
+    LoteEstado,
+    LoteTipo,
+    TipoDeCafe,
+)
+from app.modules.pedidos.models import (
+    DetallePedido,
+    EstadoPedido,
+    MetodoDespacho,
+    Pedido,
+    PedidoEstadoHistorial,
+)
 
-# Import all models to register them with Base.metadata
-from app.modules.auth import models as auth_models
-from app.modules.clientes import models as clientes_models
-from app.modules.inventario import models as inventario_models
-from app.modules.gastos import models as gastos_models
-from app.modules.pedidos import models as pedidos_models
 
-
-def get_database_url():
-    """Obtiene la URL de BD desde argumentos o settings."""
-    if len(sys.argv) > 1:
-        return sys.argv[1]
-    return settings.DATABASE_URL
-
-
-# Datos de demo (basados en frontend/src/data/mockData.js)
-
-CLIENTES_DEMO = [
+CUENTAS_DEMO: list[dict[str, Any]] = [
     {
-        "id": 1,
-        "nombre": "Cafetería El Aroma",
-        "tipo": "B2B",
-        "kilos_comprados": 120,
-        "tiene_deuda": True,
-        "monto_deuda": Decimal("45000"),
-        "telefono": "+54 11 4567-8901",
+        "correo": "admin@cafedefinca.com",
+        "clave": "admin123",
+        "rol": UserRole.ADMINISTRADOR,
+        "nombre": "Ana",
+        "apellido": "Administradora",
+        "telefono": None,
+    },
+    {
+        "correo": "operario@cafedefinca.com",
+        "clave": "operario123",
+        "rol": UserRole.OPERARIO,
+        "nombre": "Oscar",
+        "apellido": "Operario",
+        "telefono": "+54 11 4000-1001",
+        "empleado": {
+            "fecha_de_contratacion": date(2024, 3, 1),
+            "fecha_de_nacimiento": date(1990, 7, 12),
+            "salario": Decimal("950000"),
+        },
+    },
+    {
+        "correo": "cajero@cafedefinca.com",
+        "clave": "cajero123",
+        "rol": UserRole.CAJERO,
+        "nombre": "Carla",
+        "apellido": "Cajera",
+        "telefono": "+54 11 4000-1002",
+        "empleado": {
+            "fecha_de_contratacion": date(2025, 1, 15),
+            "fecha_de_nacimiento": date(1994, 11, 3),
+            "salario": Decimal("880000"),
+        },
+    },
+]
+
+CLIENTES_DEMO: list[dict[str, Any]] = [
+    {
+        "nombre": "Cafetería",
+        "apellido": "El Aroma",
         "email": "pedidos@elaroma.com.ar",
+        "telefono": "+54 11 4567-8901",
+        "tipo": TipoCliente.MAYORISTA,
         "direccion": "Av. Corrientes 1234, CABA",
+        "saldo": Decimal("45000"),
+        "limite": Decimal("200000"),
+        "fecha_alta": datetime(2025, 6, 15, 10, 0),
     },
     {
-        "id": 2,
-        "nombre": "Distribuidora Café Sur",
-        "tipo": "B2B",
-        "kilos_comprados": 500,
-        "tiene_deuda": False,
-        "monto_deuda": Decimal("0"),
-        "telefono": "+54 11 3210-5555",
+        "nombre": "Distribuidora Café",
+        "apellido": "Sur",
         "email": "compras@cafesur.com.ar",
+        "telefono": "+54 11 3210-5555",
+        "tipo": TipoCliente.MAYORISTA,
         "direccion": "Ruta 3 Km 45, La Matanza",
+        "saldo": Decimal("0"),
+        "limite": Decimal("500000"),
+        "fecha_alta": datetime(2025, 3, 22, 10, 0),
     },
     {
-        "id": 3,
-        "nombre": "María González",
-        "tipo": "B2C",
-        "kilos_comprados": 5,
-        "tiene_deuda": False,
-        "monto_deuda": Decimal("0"),
-        "telefono": "+54 9 11 6789-0123",
+        "nombre": "María",
+        "apellido": "González",
         "email": "maria.gonzalez@email.com",
+        "telefono": "+54 9 11 6789-0123",
+        "tipo": TipoCliente.CONSUMIDOR_FINAL,
         "direccion": "Palermo, CABA",
+        "saldo": Decimal("0"),
+        "limite": None,
+        "fecha_alta": datetime(2026, 1, 10, 10, 0),
+        # Esta persona es la dueña del acceso al portal de clientes.
+        "correo_cuenta": "cliente@cafedefinca.com",
+        "clave_cuenta": "cliente123",
     },
     {
-        "id": 4,
-        "nombre": "Restaurant La Mesita",
-        "tipo": "B2B",
-        "kilos_comprados": 80,
-        "tiene_deuda": True,
-        "monto_deuda": Decimal("120000"),
-        "telefono": "+54 11 4455-6677",
+        "nombre": "Restaurant La",
+        "apellido": "Mesita",
         "email": "gerencia@lamesita.com.ar",
+        "telefono": "+54 11 4455-6677",
+        "tipo": TipoCliente.MAYORISTA,
         "direccion": "San Telmo, CABA",
+        "saldo": Decimal("120000"),
+        "limite": Decimal("150000"),
+        "fecha_alta": datetime(2025, 9, 1, 10, 0),
     },
     {
-        "id": 5,
-        "nombre": "Juan Pérez",
-        "tipo": "B2C",
-        "kilos_comprados": 2,
-        "tiene_deuda": False,
-        "monto_deuda": Decimal("0"),
-        "telefono": "+54 9 11 3344-5566",
+        "nombre": "Juan",
+        "apellido": "Pérez",
         "email": "juan.perez@email.com",
+        "telefono": "+54 9 11 3344-5566",
+        "tipo": TipoCliente.CONSUMIDOR_FINAL,
         "direccion": "Belgrano, CABA",
+        "saldo": Decimal("0"),
+        "limite": None,
+        "fecha_alta": datetime(2026, 2, 1, 10, 0),
     },
 ]
 
-STOCK_DEMO = [
-    # Café Verde
+TIPOS_DE_CAFE_DEMO: list[dict[str, Any]] = [
     {
-        "id": 1,
-        "tipo": "verde",
         "variedad": "Arábica Bourbon",
-        "origen": "Colombia - Huila",
-        "precio_kg": Decimal("8500"),
-        "lote_principal": "LOTE-2026-001",
-        "bolsas": [
-            {"id": "b1", "estado": "cerrada", "kilos": Decimal("60"), "fecha_creacion": "2026-01-15T10:00:00", "lote_ref": "LOTE-2026-001-A"},
-            {"id": "b2", "estado": "cerrada", "kilos": Decimal("60"), "fecha_creacion": "2026-01-15T10:00:00", "lote_ref": "LOTE-2026-001-B"},
-            {"id": "b3", "estado": "abierta", "kilos": Decimal("30"), "fecha_creacion": "2026-01-15T10:00:00", "lote_ref": "LOTE-2026-001-C"},
-        ],
+        "pais": "Colombia",
+        "region": "Huila",
+        "organico": True,
+        "precio": Decimal("18500"),
     },
     {
-        "id": 2,
-        "tipo": "verde",
         "variedad": "Arábica Typica",
-        "origen": "Brasil - Minas Gerais",
-        "precio_kg": Decimal("7200"),
-        "lote_principal": "LOTE-2026-002",
-        "bolsas": [
-            {"id": "b4", "estado": "cerrada", "kilos": Decimal("60"), "fecha_creacion": "2026-01-20T10:00:00", "lote_ref": "LOTE-2026-002-A"},
-            {"id": "b5", "estado": "cerrada", "kilos": Decimal("60"), "fecha_creacion": "2026-01-20T10:00:00", "lote_ref": "LOTE-2026-002-B"},
-            {"id": "b6", "estado": "cerrada", "kilos": Decimal("60"), "fecha_creacion": "2026-01-20T10:00:00", "lote_ref": "LOTE-2026-002-C"},
-            {"id": "b7", "estado": "abierta", "kilos": Decimal("20"), "fecha_creacion": "2026-01-20T10:00:00", "lote_ref": "LOTE-2026-002-D"},
-        ],
+        "pais": "Brasil",
+        "region": "Minas Gerais",
+        "organico": False,
+        "precio": Decimal("19800"),
     },
     {
-        "id": 3,
-        "tipo": "verde",
         "variedad": "Robusta",
-        "origen": "Vietnam - Dak Lak",
-        "precio_kg": Decimal("4800"),
-        "lote_principal": "LOTE-2026-003",
-        "bolsas": [
-            {"id": "b8", "estado": "cerrada", "kilos": Decimal("60"), "fecha_creacion": "2026-02-01T10:00:00", "lote_ref": "LOTE-2026-003-A"},
-            {"id": "b9", "estado": "abierta", "kilos": Decimal("40"), "fecha_creacion": "2026-02-01T10:00:00", "lote_ref": "LOTE-2026-003-B"},
-        ],
-    },
-    # Café Tostado
-    {
-        "id": 4,
-        "tipo": "tostado",
-        "variedad": "Arábica Bourbon - Tueste Medio",
-        "origen": "Colombia - Huila",
-        "precio_kg": Decimal("18500"),
-        "lote_principal": "TST-2026-001",
-        "bolsas": [
-            {"id": "b10", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-01"},
-            {"id": "b11", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-02"},
-            {"id": "b12", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-03"},
-            {"id": "b13", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-04"},
-            {"id": "b14", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-05"},
-            {"id": "b15", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-06"},
-            {"id": "b16", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-07"},
-            {"id": "b17", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-08"},
-            {"id": "b18", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-09"},
-            {"id": "b19", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-10"},
-            {"id": "b20", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-11"},
-            {"id": "b21", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-12"},
-            {"id": "b22", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-13"},
-            {"id": "b23", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-14"},
-            {"id": "b24", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-15"},
-            {"id": "b25", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-16"},
-            {"id": "b26", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-17"},
-            {"id": "b27", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-18"},
-            {"id": "b28", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-19"},
-            {"id": "b29", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-20"},
-            {"id": "b30", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-21"},
-            {"id": "b31", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-22"},
-            {"id": "b32", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-23"},
-            {"id": "b33", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-24"},
-            {"id": "b34", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-25"},
-            {"id": "b35", "estado": "abierta", "kilos": Decimal("0.5"), "fecha_creacion": "2026-02-10T10:00:00", "lote_ref": "TST-2026-001-26"},
-        ],
-    },
-    {
-        "id": 5,
-        "tipo": "tostado",
-        "variedad": "Blend Casa - Tueste Oscuro",
-        "origen": "Brasil + Colombia",
-        "precio_kg": Decimal("16200"),
-        "lote_principal": "TST-2026-002",
-        "bolsas": [
-            {"id": "b36", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-01"},
-            {"id": "b37", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-02"},
-            {"id": "b38", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-03"},
-            {"id": "b39", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-04"},
-            {"id": "b40", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-05"},
-            {"id": "b41", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-06"},
-            {"id": "b42", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-07"},
-            {"id": "b43", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-08"},
-            {"id": "b44", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-09"},
-            {"id": "b45", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-10"},
-            {"id": "b46", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-11"},
-            {"id": "b47", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-12"},
-            {"id": "b48", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-13"},
-            {"id": "b49", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-14"},
-            {"id": "b50", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-15"},
-            {"id": "b51", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-16"},
-            {"id": "b52", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-17"},
-            {"id": "b53", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-18"},
-            {"id": "b54", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-19"},
-            {"id": "b55", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-20"},
-            {"id": "b56", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-21"},
-            {"id": "b57", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-22"},
-            {"id": "b58", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-23"},
-            {"id": "b59", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-24"},
-            {"id": "b60", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-25"},
-            {"id": "b61", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-26"},
-            {"id": "b62", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-27"},
-            {"id": "b63", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-28"},
-            {"id": "b64", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-29"},
-            {"id": "b65", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-30"},
-            {"id": "b66", "estado": "abierta", "kilos": Decimal("0.5"), "fecha_creacion": "2026-02-12T10:00:00", "lote_ref": "TST-2026-002-31"},
-        ],
-    },
-    {
-        "id": 6,
-        "tipo": "tostado",
-        "variedad": "Arábica Typica - Tueste Claro",
-        "origen": "Brasil - Minas Gerais",
-        "precio_kg": Decimal("19800"),
-        "lote_principal": "TST-2026-003",
-        "bolsas": [
-            {"id": "b67", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-01"},
-            {"id": "b68", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-02"},
-            {"id": "b69", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-03"},
-            {"id": "b70", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-04"},
-            {"id": "b71", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-05"},
-            {"id": "b72", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-06"},
-            {"id": "b73", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-07"},
-            {"id": "b74", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-08"},
-            {"id": "b75", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-09"},
-            {"id": "b76", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-10"},
-            {"id": "b77", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-11"},
-            {"id": "b78", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-12"},
-            {"id": "b79", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-13"},
-            {"id": "b80", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-14"},
-            {"id": "b81", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-15"},
-            {"id": "b82", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-16"},
-            {"id": "b83", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-17"},
-            {"id": "b84", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-18"},
-            {"id": "b85", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-19"},
-            {"id": "b86", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-20"},
-            {"id": "b87", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-21"},
-            {"id": "b88", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-22"},
-            {"id": "b89", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-23"},
-            {"id": "b90", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-24"},
-            {"id": "b91", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-25"},
-            {"id": "b92", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-26"},
-            {"id": "b93", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-27"},
-            {"id": "b94", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-28"},
-            {"id": "b95", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-29"},
-            {"id": "b96", "estado": "cerrada", "kilos": Decimal("1"), "fecha_creacion": "2026-02-14T10:00:00", "lote_ref": "TST-2026-003-30"},
-        ],
+        "pais": "Vietnam",
+        "region": "Dak Lak",
+        "organico": False,
+        "precio": Decimal("12500"),
     },
 ]
 
-PEDIDOS_DEMO = [
+BLEND_DEMO: dict[str, Any] = {
+    "nombre": "Blend Casa",
+    "descripcion": "Brasil + Colombia",
+    "precio": Decimal("16200"),
+    "composicion": [("Arábica Bourbon", Decimal("60")), ("Arábica Typica", Decimal("40"))],
+}
+
+# (variedad, tipo, código, kilos, estado, fecha de ingreso)
+LOTES_DEMO: list[tuple[str, LoteTipo, str, Decimal, LoteEstado, datetime]] = [
+    ("Arábica Bourbon", LoteTipo.VERDE, "LOTE-2026-001-A", Decimal("60"), LoteEstado.CERRADO, datetime(2026, 1, 15, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.VERDE, "LOTE-2026-001-B", Decimal("60"), LoteEstado.CERRADO, datetime(2026, 1, 15, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.VERDE, "LOTE-2026-001-C", Decimal("30"), LoteEstado.ABIERTO, datetime(2026, 1, 15, 10, 0)),
+    ("Arábica Typica", LoteTipo.VERDE, "LOTE-2026-002-A", Decimal("60"), LoteEstado.CERRADO, datetime(2026, 1, 20, 10, 0)),
+    ("Arábica Typica", LoteTipo.VERDE, "LOTE-2026-002-B", Decimal("60"), LoteEstado.CERRADO, datetime(2026, 1, 20, 10, 0)),
+    ("Arábica Typica", LoteTipo.VERDE, "LOTE-2026-002-C", Decimal("20"), LoteEstado.ABIERTO, datetime(2026, 1, 20, 10, 0)),
+    ("Robusta", LoteTipo.VERDE, "LOTE-2026-003-A", Decimal("60"), LoteEstado.CERRADO, datetime(2026, 2, 1, 10, 0)),
+    ("Robusta", LoteTipo.VERDE, "LOTE-2026-003-B", Decimal("40"), LoteEstado.ABIERTO, datetime(2026, 2, 1, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.TOSTADO, "TST-2026-001-01", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 10, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.TOSTADO, "TST-2026-001-02", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 10, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.TOSTADO, "TST-2026-001-03", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 10, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.TOSTADO, "TST-2026-001-04", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 10, 10, 0)),
+    ("Arábica Bourbon", LoteTipo.TOSTADO, "TST-2026-001-05", Decimal("20"), LoteEstado.ABIERTO, datetime(2026, 2, 10, 10, 0)),
+    ("Arábica Typica", LoteTipo.TOSTADO, "TST-2026-002-01", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 14, 10, 0)),
+    ("Arábica Typica", LoteTipo.TOSTADO, "TST-2026-002-02", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 14, 10, 0)),
+    ("Arábica Typica", LoteTipo.TOSTADO, "TST-2026-002-03", Decimal("20"), LoteEstado.ABIERTO, datetime(2026, 2, 14, 10, 0)),
+    ("Blend Casa", LoteTipo.TOSTADO, "TST-2026-003-01", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 12, 10, 0)),
+    ("Blend Casa", LoteTipo.TOSTADO, "TST-2026-003-02", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 12, 10, 0)),
+    ("Blend Casa", LoteTipo.TOSTADO, "TST-2026-003-03", Decimal("20"), LoteEstado.CERRADO, datetime(2026, 2, 12, 10, 0)),
+    ("Blend Casa", LoteTipo.TOSTADO, "TST-2026-003-04", Decimal("20"), LoteEstado.ABIERTO, datetime(2026, 2, 12, 10, 0)),
+    ("Robusta", LoteTipo.TOSTADO, "TST-2026-004-01", Decimal("15"), LoteEstado.ABIERTO, datetime(2026, 2, 18, 10, 0)),
+]
+
+# El precio de cada ítem se toma del catálogo para que el total sea coherente.
+PEDIDOS_DEMO: list[dict[str, Any]] = [
     {
-        "id": 1,
-        "fecha": "2026-02-10T10:00:00",
-        "estado": "Entregado",
-        "cliente_id": 1,
-        "items": [
-            {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("20"), "precio_kg": Decimal("18500")},
-            {"stock_id": 5, "variedad": "Blend Casa - Tueste Oscuro", "kilos": Decimal("10"), "precio_kg": Decimal("16200")},
-        ],
+        "clave": "seed-demo-1",
+        "fecha": datetime(2026, 2, 10, 10, 0),
+        "estado": EstadoPedido.ENTREGADO,
+        "cliente_email": "pedidos@elaroma.com.ar",
         "medio_contacto": "WhatsApp",
         "observaciones": "Entrega en local antes de las 10am",
-        "total": Decimal("532000"),
+        "items": [("Arábica Bourbon", Decimal("20")), ("Blend Casa", Decimal("10"))],
     },
     {
-        "id": 2,
-        "fecha": "2026-02-12T10:00:00",
-        "estado": "Listo",
-        "cliente_id": 2,
-        "items": [
-            {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("50"), "precio_kg": Decimal("18500")},
-            {"stock_id": 6, "variedad": "Arábica Typica - Tueste Claro", "kilos": Decimal("30"), "precio_kg": Decimal("19800")},
-        ],
+        "clave": "seed-demo-2",
+        "fecha": datetime(2026, 2, 12, 10, 0),
+        "estado": EstadoPedido.LISTO,
+        "cliente_email": "compras@cafesur.com.ar",
         "medio_contacto": "Email",
         "observaciones": "Factura A requerida",
-        "total": Decimal("1519000"),
+        "items": [("Arábica Bourbon", Decimal("50")), ("Arábica Typica", Decimal("30"))],
     },
     {
-        "id": 3,
-        "fecha": "2026-02-14T10:00:00",
-        "estado": "Pendiente",
-        "cliente_id": 3,
-        "items": [
-            {"stock_id": 5, "variedad": "Blend Casa - Tueste Oscuro", "kilos": Decimal("2"), "precio_kg": Decimal("16200")},
-            {"stock_id": 6, "variedad": "Arábica Typica - Tueste Claro", "kilos": Decimal("1"), "precio_kg": Decimal("19800")},
-        ],
+        "clave": "seed-demo-3",
+        "fecha": datetime(2026, 2, 14, 10, 0),
+        "estado": EstadoPedido.PENDIENTE,
+        "cliente_email": "maria.gonzalez@email.com",
         "medio_contacto": "Presencial",
         "observaciones": "Retira en tostaduría",
-        "total": Decimal("52200"),
+        "items": [("Blend Casa", Decimal("2")), ("Arábica Typica", Decimal("1"))],
     },
     {
-        "id": 4,
-        "fecha": "2026-02-15T10:00:00",
-        "estado": "Pendiente",
-        "cliente_id": 4,
-        "items": [
-            {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("40"), "precio_kg": Decimal("18500")},
-        ],
+        "clave": "seed-demo-4",
+        "fecha": datetime(2026, 2, 15, 10, 0),
+        "estado": EstadoPedido.PENDIENTE,
+        "cliente_email": "gerencia@lamesita.com.ar",
         "medio_contacto": "Teléfono",
         "observaciones": "Urgente - fin de semana",
-        "total": Decimal("740000"),
+        "items": [("Arábica Bourbon", Decimal("40"))],
     },
     {
-        "id": 5,
-        "fecha": "2026-02-16T10:00:00",
-        "estado": "Entregado",
-        "cliente_id": 5,
-        "items": [
-            {"stock_id": 5, "variedad": "Blend Casa - Tueste Oscuro", "kilos": Decimal("1"), "precio_kg": Decimal("16200")},
-            {"stock_id": 4, "variedad": "Arábica Bourbon - Tueste Medio", "kilos": Decimal("1"), "precio_kg": Decimal("18500")},
-        ],
+        "clave": "seed-demo-5",
+        "fecha": datetime(2026, 2, 16, 10, 0),
+        "estado": EstadoPedido.ENTREGADO,
+        "cliente_email": "juan.perez@email.com",
         "medio_contacto": "WhatsApp",
         "observaciones": "",
-        "total": Decimal("34700"),
+        "items": [("Blend Casa", Decimal("1")), ("Arábica Bourbon", Decimal("1"))],
     },
 ]
 
-GASTOS_DEMO = [
-    {
-        "id": 1,
-        "fecha": "2026-01-15T10:00:00",
-        "categoria": "Producción",
-        "descripcion": "Compra café verde - Lote 001",
-        "monto": Decimal("1275000"),
-    },
-    {
-        "id": 2,
-        "fecha": "2026-01-18T10:00:00",
-        "categoria": "Producción",
-        "descripcion": "Gas y electricidad tueste enero",
-        "monto": Decimal("85000"),
-    },
-    {
-        "id": 3,
-        "fecha": "2026-01-20T10:00:00",
-        "categoria": "Operativo",
-        "descripcion": "Alquiler tostaduría enero",
-        "monto": Decimal("180000"),
-    },
-    {
-        "id": 4,
-        "fecha": "2026-01-25T10:00:00",
-        "categoria": "Marketing",
-        "descripcion": "Publicidad Instagram/Facebook",
-        "monto": Decimal("45000"),
-    },
-    {
-        "id": 5,
-        "fecha": "2026-02-01T10:00:00",
-        "categoria": "Producción",
-        "descripcion": "Compra café verde - Lote 002",
-        "monto": Decimal("1440000"),
-    },
-    {
-        "id": 6,
-        "fecha": "2026-02-05T10:00:00",
-        "categoria": "Operativo",
-        "descripcion": "Mantenimiento tostadora",
-        "monto": Decimal("120000"),
-    },
-    {
-        "id": 7,
-        "fecha": "2026-02-10T10:00:00",
-        "categoria": "Operativo",
-        "descripcion": "Alquiler tostaduría febrero",
-        "monto": Decimal("180000"),
-    },
-    {
-        "id": 8,
-        "fecha": "2026-02-12T10:00:00",
-        "categoria": "Producción",
-        "descripcion": "Bolsas y etiquetado",
-        "monto": Decimal("65000"),
-    },
+GASTOS_DEMO: list[dict[str, Any]] = [
+    {"fecha": datetime(2026, 1, 15, 10, 0), "categoria": "Producción", "descripcion": "Compra café verde - Lote 001", "monto": Decimal("1275000")},
+    {"fecha": datetime(2026, 1, 18, 10, 0), "categoria": "Producción", "descripcion": "Gas y electricidad tueste enero", "monto": Decimal("85000")},
+    {"fecha": datetime(2026, 1, 20, 10, 0), "categoria": "Operativo", "descripcion": "Alquiler tostaduría enero", "monto": Decimal("180000")},
+    {"fecha": datetime(2026, 1, 25, 10, 0), "categoria": "Marketing", "descripcion": "Publicidad Instagram/Facebook", "monto": Decimal("45000")},
+    {"fecha": datetime(2026, 2, 1, 10, 0), "categoria": "Producción", "descripcion": "Compra café verde - Lote 002", "monto": Decimal("1440000")},
+    {"fecha": datetime(2026, 2, 5, 10, 0), "categoria": "Operativo", "descripcion": "Mantenimiento tostadora", "monto": Decimal("120000")},
+    {"fecha": datetime(2026, 2, 10, 10, 0), "categoria": "Operativo", "descripcion": "Alquiler tostaduría febrero", "monto": Decimal("180000")},
+    {"fecha": datetime(2026, 2, 12, 10, 0), "categoria": "Producción", "descripcion": "Bolsas y etiquetado", "monto": Decimal("65000")},
 ]
 
 
-def seed(database_url: str = None):
-    """Ejecuta el seed completo usando SQL directo para máxima compatibilidad."""
-    if database_url is None:
-        database_url = get_database_url()
-    
-    print(f"[SEED] Conectando a: {database_url}")
-    
-    engine = create_engine(database_url)
-    
-    # Crear tablas si no existen (antes de conectar para SQLite)
-    Base.metadata.create_all(bind=engine)
-    print("[OK] Tablas creadas/verificadas")
-    
-    with engine.connect() as conn:
-        trans = conn.begin()
+def _crear_cuenta(db: Session, datos: dict[str, Any]) -> Cuenta:
+    """Devuelve la cuenta del correo, creándola con su clave si no existe."""
+    cuenta = db.query(Cuenta).filter(Cuenta.correo == datos["correo"]).first()
+    if cuenta is None:
+        cuenta = Cuenta(
+            correo=datos["correo"],
+            clave=get_password_hash(datos["clave"]),
+            rol=datos["rol"],
+        )
+        db.add(cuenta)
+        db.flush()
+    return cuenta
+
+
+def _crear_persona(
+    db: Session,
+    nombre: str,
+    apellido: str,
+    email: str,
+    telefono: Optional[str],
+    cuenta_id: Optional[int] = None,
+) -> Persona:
+    """Devuelve la persona del correo, creándola si no existe."""
+    persona = db.query(Persona).filter(Persona.email == email).first()
+    if persona is None:
+        persona = Persona(
+            nombre=nombre,
+            apellido=apellido,
+            email=email,
+            telefono=telefono,
+            cuenta_id=cuenta_id,
+        )
+        db.add(persona)
+        db.flush()
+    elif cuenta_id is not None and persona.cuenta_id is None:
+        persona.cuenta_id = cuenta_id
+        db.flush()
+    return persona
+
+
+def _crear_cliente(
+    db: Session, persona: Persona, datos: dict[str, Any]
+) -> Cliente:
+    """Devuelve el cliente de la persona, creándolo con su cuenta corriente."""
+    cliente = db.get(Cliente, persona.id)
+    if cliente is None:
+        cliente = Cliente(
+            persona_id=persona.id,
+            tipo=datos["tipo"],
+            direccion_de_entrega=datos["direccion"],
+            fecha_alta=datos["fecha_alta"],
+            saldo_cuenta_corriente=datos["saldo"],
+            limite_credito=datos["limite"],
+        )
+        db.add(cliente)
+        db.flush()
+    return cliente
+
+
+def _crear_empleado(
+    db: Session, persona: Persona, datos: dict[str, Any]
+) -> Empleado:
+    """Devuelve el empleado de la persona, creándolo si no existe."""
+    empleado = db.get(Empleado, persona.id)
+    if empleado is None:
+        empleado = Empleado(
+            persona_id=persona.id,
+            fecha_de_contratacion=datos["fecha_de_contratacion"],
+            fecha_de_nacimiento=datos["fecha_de_nacimiento"],
+            salario=datos["salario"],
+        )
+        db.add(empleado)
+        db.flush()
+    return empleado
+
+
+def _crear_tipo_de_cafe(db: Session, datos: dict[str, Any]) -> TipoDeCafe:
+    """Devuelve el tipo de café por variedad y país."""
+    tipo = (
+        db.query(TipoDeCafe)
+        .filter(
+            TipoDeCafe.variedad == datos["variedad"],
+            TipoDeCafe.pais == datos["pais"],
+        )
+        .first()
+    )
+    if tipo is None:
+        tipo = TipoDeCafe(
+            organico=datos["organico"],
+            precio_por_kg_verde=datos["precio"],
+            variedad=datos["variedad"],
+            region=datos["region"],
+            pais=datos["pais"],
+        )
+        db.add(tipo)
+        db.flush()
+    return tipo
+
+
+def _crear_blend(
+    db: Session, datos: dict[str, Any], tipos: dict[str, TipoDeCafe]
+) -> Blend:
+    """Devuelve el blend por nombre y completa su composición."""
+    blend = db.query(Blend).filter(Blend.nombre == datos["nombre"]).first()
+    if blend is None:
+        blend = Blend(
+            nombre=datos["nombre"],
+            precio_por_kg_verde=datos["precio"],
+            descripcion=datos["descripcion"],
+        )
+        db.add(blend)
+        db.flush()
+
+    for variedad, porcentaje in datos["composicion"]:
+        tipo = tipos[variedad]
+        existente = db.get(BlendHasTipoDeCafe, (blend.id, tipo.id))
+        if existente is None:
+            db.add(
+                BlendHasTipoDeCafe(
+                    blend_id=blend.id,
+                    tipo_de_cafe_id=tipo.id,
+                    porcentaje=porcentaje,
+                )
+            )
+    db.flush()
+    return blend
+
+
+def _crear_lote(
+    db: Session,
+    tipo: LoteTipo,
+    codigo: str,
+    kilos: Decimal,
+    estado: LoteEstado,
+    fecha_ingreso: datetime,
+    tipo_de_cafe: Optional[TipoDeCafe] = None,
+    blend: Optional[Blend] = None,
+) -> Lote:
+    """Crea el lote si el código no existe y lo devuelve."""
+    lote = db.query(Lote).filter(Lote.codigo_lote == codigo).first()
+    if lote is None:
+        lote = Lote(
+            codigo_lote=codigo,
+            fecha_ingreso=fecha_ingreso,
+            tipo=tipo,
+            estado=estado,
+            fecha_vencimiento=fecha_ingreso + timedelta(days=365),
+            humedad=Decimal("12.00"),
+            kg_disponibles=kilos,
+            kg_reales=kilos,
+            ubicacion_fisica="Depósito principal",
+            tipo_de_cafe_id=tipo_de_cafe.id if tipo_de_cafe else None,
+            blend_id=blend.id if blend else None,
+        )
+        db.add(lote)
+        db.flush()
+    return lote
+
+
+def _crear_pedido(
+    db: Session,
+    datos: dict[str, Any],
+    clientes: dict[str, Cliente],
+    precios: dict[str, Decimal],
+    empleado_id: Optional[int],
+) -> Pedido:
+    """Crea el pedido con sus detalles si la clave de idempotencia no existe."""
+    pedido = (
+        db.query(Pedido)
+        .filter(Pedido.idempotency_key == datos["clave"])
+        .first()
+    )
+    if pedido is not None:
+        return pedido
+
+    total = sum(
+        (kilos * precios[variedad] for variedad, kilos in datos["items"]),
+        Decimal("0"),
+    )
+    cliente = clientes[datos["cliente_email"]]
+    pedido = Pedido(
+        fecha=datos["fecha"],
+        metodo_de_despacho=MetodoDespacho.RETIRO_LOCAL,
+        estado=datos["estado"],
+        total=total,
+        idempotency_key=datos["clave"],
+        medio_contacto=datos["medio_contacto"],
+        observaciones=datos["observaciones"] or None,
+        cliente_persona_id=cliente.persona_id,
+        empleado_persona_id=empleado_id,
+    )
+    db.add(pedido)
+    db.flush()
+
+    for variedad, kilos in datos["items"]:
+        db.add(
+            DetallePedido(
+                cantidad_kg=kilos,
+                subtotal=kilos * precios[variedad],
+                pedido_id=pedido.id,
+                tipo_de_cafe_id=(
+                    None
+                    if variedad == BLEND_DEMO["nombre"]
+                    else db.query(TipoDeCafe)
+                    .filter(TipoDeCafe.variedad == variedad)
+                    .one()
+                    .id
+                ),
+                blend_id=(
+                    db.query(Blend)
+                    .filter(Blend.nombre == variedad)
+                    .one()
+                    .id
+                    if variedad == BLEND_DEMO["nombre"]
+                    else None
+                ),
+            )
+        )
+
+    db.add(
+        PedidoEstadoHistorial(
+            pedido_id=pedido.id,
+            estado_anterior=None,
+            estado_nuevo=datos["estado"],
+            usuario_id=None,
+            timestamp=datos["fecha"],
+        )
+    )
+    db.flush()
+    return pedido
+
+
+def _crear_gasto(db: Session, datos: dict[str, Any]) -> None:
+    """Crea el gasto si no coincide fecha, categoría y descripción."""
+    existente = (
+        db.query(Gasto)
+        .filter(
+            Gasto.fecha == datos["fecha"],
+            Gasto.categoria == datos["categoria"],
+            Gasto.descripcion == datos["descripcion"],
+        )
+        .first()
+    )
+    if existente is None:
+        db.add(
+            Gasto(
+                fecha=datos["fecha"],
+                categoria=datos["categoria"],
+                descripcion=datos["descripcion"],
+                monto=datos["monto"],
+            )
+        )
+
+
+def seed() -> None:
+    """Ejecuta el seed completo dentro de una única transacción."""
+    # ``engine`` se importa para que SQLite aplique el PRAGMA de claves foráneas
+    # al crear la sesión; las tablas ya existen por las migraciones.
+    _ = engine
+
+    with SessionLocal() as db:
         try:
-            # 1. Usuarios (auth)
-            print("[SEED] Creando usuarios...")
-            conn.execute(text("""
-                INSERT INTO usuarios (id, username, email, hashed_password, rol, activo) VALUES
-                (1, 'admin', 'admin@cafedefinca.com', :hash_admin, 'admin', true),
-                (2, 'operador', 'operador@cafedefinca.com', :hash_op, 'operador', true)
-            """), {
-                'hash_admin': get_password_hash("admin123"),
-                'hash_op': get_password_hash("operador123"),
-            })
-            
-            # 2. Clientes
-            print("[SEED] Creando clientes...")
-            now = datetime.now().isoformat()
-            for c in CLIENTES_DEMO:
-                conn.execute(text("""
-                    INSERT INTO clientes (id, nombre, tipo, kilos_comprados, tiene_deuda, monto_deuda, telefono, email, direccion, creado_en)
-                    VALUES (:id, :nombre, :tipo, :kilos, :tiene_deuda, :deuda, :tel, :email, :dir, :creado)
-                """), {
-                    'id': c['id'], 'nombre': c['nombre'], 'tipo': c['tipo'],
-                    'kilos': c['kilos_comprados'], 'tiene_deuda': c['tiene_deuda'],
-                    'deuda': float(c['monto_deuda']), 'tel': c['telefono'],
-                    'email': c['email'], 'dir': c['direccion'], 'creado': now,
-                })
-            
-            # 3. Stock
-            print("[SEED] Creando stock...")
-            for s in STOCK_DEMO:
-                # Insert stock
-                conn.execute(text("""
-                    INSERT INTO stock (id, tipo, variedad, origen, precio_kg, lote_principal, fecha_ingreso, created_at, updated_at)
-                    VALUES (:id, :tipo, :var, :origen, :precio, :lote, :now, :now, :now)
-                """), {
-                    'id': s['id'], 'tipo': s['tipo'], 'var': s['variedad'],
-                    'origen': s['origen'], 'precio': float(s['precio_kg']), 'lote': s['lote_principal'],
-                    'now': now,
-                })
-                
-                # Insert bolsas
-                for b in s['bolsas']:
-                    conn.execute(text("""
-                        INSERT INTO bolsas (id, stock_id, estado, kilos, fecha_creacion, lote_ref, created_at, updated_at)
-                        VALUES (:id, :stock_id, :estado, :kilos, :fecha, :lote_ref, :now, :now)
-                    """), {
-                        'id': b['id'], 'stock_id': s['id'], 'estado': b['estado'],
-                        'kilos': float(b['kilos']), 'fecha': b['fecha_creacion'], 'lote_ref': b['lote_ref'],
-                        'now': now,
-                    })
-            
-            # 4. Pedidos
-            print("[SEED] Creando pedidos...")
-            for p in PEDIDOS_DEMO:
-                conn.execute(text("""
-                    INSERT INTO pedidos (id, cliente_id, fecha, estado, medio_contacto, observaciones, total, idempotency_key, creado_en)
-                    VALUES (:id, :cliente_id, :fecha, :estado, :medio, :obs, :total, :idem, :creado)
-                """), {
-                    'id': p['id'], 'cliente_id': p['cliente_id'], 'fecha': p['fecha'],
-                    'estado': p['estado'], 'medio': p['medio_contacto'],
-                    'obs': p['observaciones'], 'total': float(p['total']),
-                    'idem': f"seed_{p['id']}", 'creado': p['fecha'],
-                })
-                
-                item_id = p['id'] * 100  # Base para IDs de items
-                for idx, item in enumerate(p['items']):
-                    item_id = item_id + idx + 1
-                    conn.execute(text("""
-                        INSERT INTO pedido_items (id, pedido_id, stock_id, variedad, kilos, precio_kg, subtotal, created_at)
-                        VALUES (:id, :pid, :sid, :var, :kilos, :precio, :subtotal, :now)
-                    """), {
-                        'id': item_id,
-                        'pid': p['id'], 'sid': item['stock_id'], 'var': item['variedad'],
-                        'kilos': float(item['kilos']), 'precio': float(item['precio_kg']),
-                        'subtotal': float(item['kilos'] * item['precio_kg']),
-                        'now': now,
-                    })
-                
-                # Historial de estado inicial
-                hist_id = p['id'] * 1000  # Base para IDs de historial
-                conn.execute(text("""
-                    INSERT INTO pedido_estado_historial (id, pedido_id, estado_anterior, estado_nuevo, usuario_id, timestamp)
-                    VALUES (:id, :pid, NULL, :estado, 1, :ts)
-                """), {'id': hist_id, 'pid': p['id'], 'estado': p['estado'], 'ts': p['fecha']})
-                
-                # Si entregado y B2B, actualizar deuda cliente
-                if p['estado'] == 'Entregado':
-                    cliente = next((c for c in CLIENTES_DEMO if c['id'] == p['cliente_id']), None)
-                    if cliente and cliente['tipo'] == 'B2B':
-                        conn.execute(text("""
-                            UPDATE clientes SET monto_deuda = monto_deuda + :total WHERE id = :cid
-                        """), {'total': float(p['total']), 'cid': p['cliente_id']})
-            
-            # 5. Gastos
-            print("[SEED] Creando gastos...")
-            for g in GASTOS_DEMO:
-                conn.execute(text("""
-                    INSERT INTO gastos (id, fecha, categoria, descripcion, monto, created_at)
-                    VALUES (:id, :fecha, :cat, :desc, :monto, :now)
-                """), {
-                    'id': g['id'], 'fecha': g['fecha'], 'cat': g['categoria'],
-                    'desc': g['descripcion'], 'monto': float(g['monto']), 'now': now,
-                })
-            
-            trans.commit()
-            print("[OK] Seed completado exitosamente!")
-            
-        except Exception as e:
-            trans.rollback()
-            print(f"[ERROR] Error en seed: {e}")
+            # 1. Cuentas y empleados.
+            for datos in CUENTAS_DEMO:
+                cuenta = _crear_cuenta(db, datos)
+                persona = _crear_persona(
+                    db,
+                    datos["nombre"],
+                    datos["apellido"],
+                    datos["correo"],
+                    datos["telefono"],
+                    cuenta_id=cuenta.id,
+                )
+                if "empleado" in datos:
+                    _crear_empleado(db, persona, datos["empleado"])
+
+            # 2. Clientes (incluye el acceso al portal B2C).
+            clientes: dict[str, Cliente] = {}
+            for datos in CLIENTES_DEMO:
+                cuenta_id = None
+                if "correo_cuenta" in datos:
+                    cuenta = _crear_cuenta(
+                        db,
+                        {
+                            "correo": datos["correo_cuenta"],
+                            "clave": datos["clave_cuenta"],
+                            "rol": UserRole.CLIENTE,
+                        },
+                    )
+                    cuenta_id = cuenta.id
+
+                persona = _crear_persona(
+                    db,
+                    datos["nombre"],
+                    datos["apellido"],
+                    datos["email"],
+                    datos["telefono"],
+                    cuenta_id=cuenta_id,
+                )
+                clientes[datos["email"]] = _crear_cliente(db, persona, datos)
+
+            # 3. Catálogo de cafés y blend.
+            tipos = {
+                datos["variedad"]: _crear_tipo_de_cafe(db, datos)
+                for datos in TIPOS_DE_CAFE_DEMO
+            }
+            blend = _crear_blend(db, BLEND_DEMO, tipos)
+
+            precios: dict[str, Decimal] = {
+                datos["variedad"]: datos["precio"]
+                for datos in TIPOS_DE_CAFE_DEMO
+            }
+            precios[BLEND_DEMO["nombre"]] = BLEND_DEMO["precio"]
+
+            # 4. Lotes verdes y tostados.
+            for variedad, tipo, codigo, kilos, estado, fecha in LOTES_DEMO:
+                if variedad == BLEND_DEMO["nombre"]:
+                    _crear_lote(
+                        db, tipo, codigo, kilos, estado, fecha, blend=blend
+                    )
+                else:
+                    _crear_lote(
+                        db,
+                        tipo,
+                        codigo,
+                        kilos,
+                        estado,
+                        fecha,
+                        tipo_de_cafe=tipos[variedad],
+                    )
+
+            # 5. Pedidos: el empleado que los registra es el operario.
+            operario = (
+                db.query(Persona)
+                .filter(Persona.email == "operario@cafedefinca.com")
+                .one()
+            )
+            for datos in PEDIDOS_DEMO:
+                _crear_pedido(db, datos, clientes, precios, operario.id)
+
+            # 6. Gastos.
+            for datos in GASTOS_DEMO:
+                _crear_gasto(db, datos)
+
+            db.commit()
+            print("[OK] Seed completado. Credenciales de demo:")
+            for datos in CUENTAS_DEMO:
+                print(f"     {datos['correo']} / {datos['clave']} ({datos['rol'].value})")
+            print("     cliente@cafedefinca.com / cliente123 (Cliente)")
+        except Exception:
+            db.rollback()
             raise
 
 
 if __name__ == "__main__":
-    seed(get_database_url())
+    seed()

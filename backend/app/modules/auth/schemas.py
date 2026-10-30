@@ -37,3 +37,19 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UserMeResponse(BaseModel):
+    """Perfil del usuario autenticado para el panel.
+
+    ``rol`` es el valor canónico de la base (Administrador, Cajero, Operario,
+    Cliente) y ``role`` es el alias que consume el frontend (admin, vendedor,
+    empleado, cliente). ``clienteId`` solo viene poblado para clientes.
+    """
+
+    id: int
+    correo: str
+    rol: str
+    role: str
+    nombre: str
+    clienteId: Optional[str] = None

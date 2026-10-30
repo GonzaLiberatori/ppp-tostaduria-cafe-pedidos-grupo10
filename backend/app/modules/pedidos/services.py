@@ -5,6 +5,7 @@ from decimal import Decimal
 from datetime import datetime
 import hashlib
 import json
+import uuid
 
 from app.modules.pedidos import models, schemas, crud
 from app.modules.auth.models import Cuenta
@@ -82,18 +83,25 @@ class PedidoService:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def _consumir_stock_fifo(self, tipo_de_cafe_id: Optional[int], blend_id: Optional[int], cantidad: Decimal) -> List[dict]:
-        """Consumir stock FIFO y retornar detalle de consumo para rollback"""
+        """Consumir stock FIFO y retornar detalle de consumo para rollback.
+
+        Se consideran tanto los lotes abiertos como los cerrados: una bolsa
+        sellada se abre en el momento de descontar, porque el panel de stock
+        nace con todas las bolsas cerradas.
+        """
         if tipo_de_cafe_id:
             lotes = self.db.query(models.Lote).filter(
                 models.Lote.tipo_de_cafe_id == tipo_de_cafe_id,
                 models.Lote.tipo == "TOSTADO",
-                models.Lote.estado == "ABIERTO"
+                models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
+                models.Lote.kg_disponibles > 0,
             ).order_by(models.Lote.fecha_vencimiento).all()
         elif blend_id:
             lotes = self.db.query(models.Lote).filter(
                 models.Lote.blend_id == blend_id,
                 models.Lote.tipo == "TOSTADO",
-                models.Lote.estado == "ABIERTO"
+                models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
+                models.Lote.kg_disponibles > 0,
             ).order_by(models.Lote.fecha_vencimiento).all()
         else:
             raise ValueError("Debe especificar tipo_de_cafe_id o blend_id")
@@ -119,6 +127,8 @@ class PedidoService:
             
             if lote.kg_disponibles == 0:
                 lote.estado = "CERRADO"
+            else:
+                lote.estado = "ABIERTO"
         
         if restante > 0:
             raise ValueError("Stock insuficiente")
@@ -163,18 +173,22 @@ class PedidoService:
         """Registrar cambio de estado en el historial"""
         crud.create_estado_historial(self.db, pedido_id, estado_anterior, estado_nuevo, usuario_id=None)
 
-    def crear_pedido_completo(self, pedido_data: schemas.PedidoCreate, empleado_persona_id: int) -> models.Pedido:
-        """Crear un pedido con sus detalles, validando stock disponible y calculando totales"""
+    def crear_pedido_completo(self, pedido_data: schemas.PedidoCreate, empleado_persona_id: Optional[int] = None) -> models.Pedido:
+        """Crear un pedido con sus detalles, validando stock disponible y calculando totales.
+
+        ``empleado_persona_id`` es opcional para permitir el autoservicio del
+        portal de clientes, donde no hay un empleado que registre la venta.
+        """
         # Validar que el cliente existe
         cliente = crud.get_cliente(self.db, pedido_data.cliente_persona_id)
         if not cliente:
             raise ValueError("Cliente no encontrado")
         
-        # Validar que el empleado existe
-        from app.modules.pedidos import models
-        empleado = self.db.query(models.Empleado).filter(models.Empleado.persona_id == empleado_persona_id).first()
-        if not empleado:
-            raise ValueError("Empleado no encontrado")
+        # Validar que el empleado existe, solo si se indicó uno
+        if empleado_persona_id is not None:
+            empleado = self.db.query(models.Empleado).filter(models.Empleado.persona_id == empleado_persona_id).first()
+            if not empleado:
+                raise ValueError("Empleado no encontrado")
         
         # Validar y calcular detalles
         detalles_calculados = self._validar_y_calcular_detalles(pedido_data.detalles)
@@ -200,7 +214,7 @@ class PedidoService:
                 total_disponible = self.db.query(func.sum(models.Lote.kg_disponibles)).filter(
                     models.Lote.tipo_de_cafe_id == detalle.tipo_de_cafe_id,
                     models.Lote.tipo == "TOSTADO",
-                    models.Lote.estado == "ABIERTO",
+                    models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
                     models.Lote.kg_disponibles > 0
                 ).scalar() or Decimal("0")
                 if total_disponible < detalle.cantidad_kg:
@@ -210,7 +224,7 @@ class PedidoService:
                 total_disponible = self.db.query(func.sum(models.Lote.kg_disponibles)).filter(
                     models.Lote.blend_id == detalle.blend_id,
                     models.Lote.tipo == "TOSTADO",
-                    models.Lote.estado == "ABIERTO",
+                    models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
                     models.Lote.kg_disponibles > 0
                 ).scalar() or Decimal("0")
                 if total_disponible < detalle.cantidad_kg:
@@ -226,7 +240,7 @@ class PedidoService:
             medio_contacto=pedido_data.medio_contacto,
             observaciones=pedido_data.observaciones,
             cliente_persona_id=pedido_data.cliente_persona_id,
-            empleado_persona_id=pedido_data.empleado_persona_id,
+            empleado_persona_id=empleado_persona_id,
             detalles=[schemas.DetallePedidoCreate(**d) for d in self._validar_y_calcular_detalles(pedido_data.detalles)]
         )
         
@@ -621,3 +635,278 @@ class CatalogoService:
 
     def listar_lotes(self) -> List[models.Lote]:
         return crud.get_lotes(self.db)
+
+
+# ---------------------------------------------------------------------------
+# Panel de pedidos: contrato plano sobre el modelo canónico
+# ---------------------------------------------------------------------------
+class PedidoNoEncontrado(Exception):
+    """El id recibido no corresponde a ningún pedido."""
+
+    def __init__(self, pedido_id: int) -> None:
+        self.pedido_id = pedido_id
+        super().__init__(f"No existe un pedido con id {pedido_id}.")
+
+
+_ESTADOS_FRONTEND = {
+    "pendiente": "PENDIENTE",
+    "listo": "LISTO",
+    "entregado": "ENTREGADO",
+}
+
+_ESTADOS_PANEL = {
+    "PENDIENTE": "Pendiente",
+    "LISTO": "Listo",
+    "ENTREGADO": "Entregado",
+}
+
+
+def estado_canonico(valor: str) -> str:
+    """Convierte el estado del panel al valor canónico, sin distinguir mayúsculas."""
+    estado = _ESTADOS_FRONTEND.get((valor or "").strip().lower())
+    if estado is None:
+        raise ValueError("Estado inválido. Debe ser Pendiente, Listo o Entregado.")
+    return estado
+
+
+class PedidoPanelService:
+    """Traduce los pedidos del panel al modelo canónico y viceversa."""
+
+    def __init__(self, db: Session):
+        self.db = db
+        self.pedidos = PedidoService(db)
+
+    # -- Lectura ---------------------------------------------------------
+    def _item_a_panel(self, detalle: models.DetallePedido) -> schemas.PedidoPanelItemRead:
+        cantidad = detalle.cantidad_kg or Decimal("0")
+        precio_kg = (
+            (detalle.subtotal / cantidad) if cantidad else Decimal("0")
+        )
+
+        if detalle.tipo_de_cafe_id is not None:
+            stock_id = f"tc-{detalle.tipo_de_cafe_id}-TOSTADO"
+            variedad = (
+                detalle.tipo_de_cafe.variedad
+                if detalle.tipo_de_cafe is not None
+                else f"Tipo de café {detalle.tipo_de_cafe_id}"
+            )
+        elif detalle.blend_id is not None:
+            stock_id = f"bl-{detalle.blend_id}-TOSTADO"
+            variedad = (
+                detalle.blend.nombre
+                if detalle.blend is not None
+                else f"Blend {detalle.blend_id}"
+            )
+        else:
+            stock_id = ""
+            variedad = "Sin origen"
+
+        return schemas.PedidoPanelItemRead(
+            stockId=stock_id,
+            variedad=variedad,
+            kilos=float(cantidad),
+            precioKg=float(precio_kg),
+            subtotal=float(detalle.subtotal or 0),
+        )
+
+    def _a_panel(self, pedido: models.Pedido) -> schemas.PedidoPanelRead:
+        persona = pedido.cliente.persona if pedido.cliente else None
+        cliente_nombre = (
+            f"{persona.nombre} {persona.apellido}".strip()
+            if persona
+            else f"Cliente {pedido.cliente_persona_id}"
+        )
+
+        return schemas.PedidoPanelRead(
+            id=str(pedido.id),
+            fecha=pedido.fecha,
+            estado=_ESTADOS_PANEL.get(pedido.estado, str(pedido.estado)),
+            clienteId=str(pedido.cliente_persona_id),
+            clienteNombre=cliente_nombre,
+            items=[self._item_a_panel(detalle) for detalle in pedido.detalles],
+            medioContacto=pedido.medio_contacto or "",
+            observaciones=pedido.observaciones or "",
+            total=float(pedido.total or 0),
+        )
+
+    def _leer(self, pedido_id: int) -> schemas.PedidoPanelRead:
+        pedido = crud.get_pedido_with_full_info(self.db, pedido_id)
+        if pedido is None:
+            raise PedidoNoEncontrado(pedido_id)
+        return self._a_panel(pedido)
+
+    def listar(self) -> List[schemas.PedidoPanelRead]:
+        pedidos = crud.get_pedidos_con_filtros(self.db, skip=0, limit=1000)
+        return [self._a_panel(pedido) for pedido in pedidos]
+
+    def listar_por_cliente(self, cliente_id: int) -> List[schemas.PedidoPanelRead]:
+        pedidos = crud.get_pedidos_con_filtros(
+            self.db, skip=0, limit=1000, cliente_persona_id=cliente_id
+        )
+        return [self._a_panel(pedido) for pedido in pedidos]
+
+    # -- Escritura -------------------------------------------------------
+    def _detalle_desde_item(
+        self, item: schemas.PedidoPanelItem
+    ) -> schemas.DetallePedidoCreate:
+        from app.modules.inventario.models import LoteTipo
+        from app.modules.inventario.services import parsear_stock_id
+
+        try:
+            origen, entidad_id, tipo = parsear_stock_id(item.stockId)
+        except Exception:
+            raise ValueError(f"Producto de stock inválido: '{item.stockId}'.") from None
+
+        if tipo != LoteTipo.TOSTADO:
+            raise ValueError(
+                "Solo se puede vender café tostado. "
+                f"El producto '{item.stockId}' es café verde."
+            )
+
+        if origen == "tc":
+            return schemas.DetallePedidoCreate(
+                cantidad_kg=item.kilos,
+                tipo_de_cafe_id=entidad_id,
+            )
+        return schemas.DetallePedidoCreate(
+            cantidad_kg=item.kilos,
+            blend_id=entidad_id,
+        )
+
+    def resolver_empleado_actual(self, email: str) -> Optional[int]:
+        """Devuelve el empleado vinculado a la cuenta, o ``None`` si es cliente."""
+        cuenta = self.db.query(Cuenta).filter(Cuenta.correo == email).first()
+        if cuenta is None:
+            return None
+
+        persona = (
+            self.db.query(models.Persona)
+            .filter(models.Persona.cuenta_id == cuenta.id)
+            .first()
+        )
+        if persona is None:
+            return None
+
+        empleado = (
+            self.db.query(models.Empleado)
+            .filter(models.Empleado.persona_id == persona.id)
+            .first()
+        )
+        return empleado.persona_id if empleado else None
+
+    def crear(
+        self,
+        datos: schemas.PedidoPanelCreate,
+        empleado_persona_id: Optional[int] = None,
+    ) -> schemas.PedidoPanelRead:
+        """Crea el pedido, descuenta stock y aplica el estado pedido."""
+        try:
+            cliente_id = int(datos.clienteId)
+        except (TypeError, ValueError):
+            raise ValueError("Cliente inválido.") from None
+
+        objetivo = estado_canonico(datos.estado)
+        detalles = [self._detalle_desde_item(item) for item in datos.items]
+
+        pedido_in = schemas.PedidoCreate(
+            fecha=datetime.utcnow(),
+            metodo_de_despacho="Retiro en local",
+            estado="PENDIENTE",
+            idempotency_key=f"panel-{uuid.uuid4().hex}",
+            medio_contacto=datos.medioContacto or None,
+            observaciones=datos.observaciones or None,
+            cliente_persona_id=cliente_id,
+            empleado_persona_id=empleado_persona_id,
+            detalles=detalles,
+        )
+
+        pedido = self.pedidos.crear_pedido_completo(pedido_in, empleado_persona_id)
+
+        if objetivo != "PENDIENTE":
+            self._cambiar_estado(pedido, objetivo)
+
+        return self._leer(pedido.id)
+
+    def _cambiar_estado(self, pedido: models.Pedido, objetivo: str) -> None:
+        """Lleva el pedido al estado objetivo respetando las transiciones.
+
+        El panel permite mover una tarjeta de Pendiente a Entregado (o al
+        revés); se pasa por Listo para no saltear la regla de negocio ni los
+        efectos sobre la cuenta corriente.
+        """
+        actual = pedido.estado
+        if actual == objetivo:
+            return
+
+        if self.pedidos._validar_transicion_estado(actual, objetivo):
+            self.pedidos.cambiar_estado_pedido(pedido.id, objetivo)
+            return
+
+        intermedio = "LISTO"
+        if (
+            self.pedidos._validar_transicion_estado(actual, intermedio)
+            and self.pedidos._validar_transicion_estado(intermedio, objetivo)
+        ):
+            self.pedidos.cambiar_estado_pedido(pedido.id, intermedio)
+            self.pedidos.cambiar_estado_pedido(pedido.id, objetivo)
+            return
+
+        raise ValueError(f"Transición inválida: {actual} -> {objetivo}")
+
+    def actualizar(
+        self, pedido_id: int, datos: schemas.PedidoPanelUpdate
+    ) -> schemas.PedidoPanelRead:
+        """Actualiza cliente, campos simples, ítems y estado."""
+        pedido = crud.get_pedido(self.db, pedido_id)
+        if pedido is None:
+            raise PedidoNoEncontrado(pedido_id)
+
+        campos = datos.model_fields_set
+
+        if "clienteId" in campos and datos.clienteId is not None:
+            try:
+                nuevo_cliente = int(datos.clienteId)
+            except (TypeError, ValueError):
+                raise ValueError("Cliente inválido.") from None
+
+            if nuevo_cliente != pedido.cliente_persona_id:
+                if pedido.estado != "PENDIENTE":
+                    raise ValueError(
+                        "Solo se puede cambiar el cliente de un pedido pendiente."
+                    )
+                if crud.get_cliente(self.db, nuevo_cliente) is None:
+                    raise ValueError("Cliente no encontrado.")
+                pedido.cliente_persona_id = nuevo_cliente
+                self.db.commit()
+
+        simples = {}
+        if "medioContacto" in campos:
+            simples["medio_contacto"] = (datos.medioContacto or "").strip() or None
+        if "observaciones" in campos:
+            simples["observaciones"] = (datos.observaciones or "").strip() or None
+
+        if datos.items is not None:
+            detalles = [self._detalle_desde_item(item) for item in datos.items]
+            self.pedidos.actualizar_pedido(
+                pedido_id,
+                schemas.PedidoUpdate(**simples),
+                detalles=detalles,
+            )
+        elif simples:
+            self.pedidos.actualizar_pedido(
+                pedido_id, schemas.PedidoUpdate(**simples)
+            )
+
+        if "estado" in campos and datos.estado is not None:
+            objetivo = estado_canonico(datos.estado)
+            pedido_actualizado = crud.get_pedido(self.db, pedido_id)
+            if pedido_actualizado is None:
+                raise PedidoNoEncontrado(pedido_id)
+            self._cambiar_estado(pedido_actualizado, objetivo)
+
+        return self._leer(pedido_id)
+
+    def eliminar(self, pedido_id: int) -> None:
+        """Elimina un pedido pendiente y devuelve su stock."""
+        if not self.pedidos.eliminar_pedido(pedido_id):
+            raise PedidoNoEncontrado(pedido_id)

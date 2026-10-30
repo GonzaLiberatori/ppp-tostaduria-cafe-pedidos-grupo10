@@ -14,7 +14,8 @@ from typing import NoReturn, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
+from app.modules.auth.schemas import TokenData
 from app.modules.inventario import services
 from app.modules.inventario.schemas import (
     BlendCreate,
@@ -29,6 +30,14 @@ from app.modules.inventario.schemas import (
     TipoDeCafeCreate,
     TipoDeCafeRead,
     TipoDeCafeUpdate,
+)
+from app.modules.inventario.schemas_panel import (
+    BolsaPanelCreate,
+    BolsaPanelRead,
+    BolsaPanelUpdate,
+    StockPanelCreate,
+    StockPanelRead,
+    StockPanelUpdate,
 )
 
 router = APIRouter(tags=["Inventario"])
@@ -62,6 +71,16 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     elif isinstance(exc, services.FiltroLotesInvalido):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    elif isinstance(exc, services.StockItemInvalido):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    elif isinstance(exc, services.StockItemNoEncontrado):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.TipoDeStockInmutable):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    elif isinstance(exc, services.BolsaNoEncontrada):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    elif isinstance(exc, services.BolsaNoPerteneceAlStock):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     raise exc
 
 
@@ -279,3 +298,153 @@ def actualizar_estado(
         return services.actualizar_estado(db, lote_id, datos)
     except services.LoteNoEncontrado as exc:
         _a_codigo_http(exc)
+
+
+# ---------------------------------------------------------------------------
+# Panel de stock: cafés con bolsas
+# ---------------------------------------------------------------------------
+RUTA_STOCK = "/stock"
+
+
+@router.get(RUTA_STOCK, response_model=list[StockPanelRead])
+def listar_stock(
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> list[StockPanelRead]:
+    """Lista los cafés con sus bolsas para el panel."""
+    return services.listar_stock(db)
+
+
+@router.get(f"{RUTA_STOCK}/{{stock_id}}", response_model=StockPanelRead)
+def obtener_stock(
+    stock_id: str,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> StockPanelRead:
+    """Devuelve un café del panel por su identificador plano."""
+    try:
+        return services.obtener_stock(db, stock_id)
+    except (services.StockItemInvalido, services.StockItemNoEncontrado) as exc:
+        _a_codigo_http(exc)
+
+
+@router.post(RUTA_STOCK, response_model=StockPanelRead, status_code=status.HTTP_201_CREATED)
+def crear_stock(
+    datos: StockPanelCreate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> StockPanelRead:
+    """Crea un café con sus bolsas iniciales."""
+    try:
+        return services.crear_stock(db, datos)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.patch(f"{RUTA_STOCK}/{{stock_id}}", response_model=StockPanelRead)
+def actualizar_stock(
+    stock_id: str,
+    datos: StockPanelUpdate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> StockPanelRead:
+    """Edita los datos de un café del panel."""
+    try:
+        return services.actualizar_stock(db, stock_id, datos)
+    except (
+        services.StockItemInvalido,
+        services.StockItemNoEncontrado,
+        services.TipoDeStockInmutable,
+    ) as exc:
+        _a_codigo_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete(
+    f"{RUTA_STOCK}/{{stock_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def eliminar_stock(
+    stock_id: str,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> Response:
+    """Elimina las bolsas de un café del panel."""
+    try:
+        services.eliminar_stock(db, stock_id)
+    except (services.StockItemInvalido, services.StockItemNoEncontrado) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    f"{RUTA_STOCK}/{{stock_id}}/bolsas",
+    response_model=BolsaPanelRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def agregar_bolsa(
+    stock_id: str,
+    datos: BolsaPanelCreate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> BolsaPanelRead:
+    """Agrega una bolsa al café indicado."""
+    try:
+        return services.agregar_bolsa(db, stock_id, datos)
+    except (services.StockItemInvalido, services.StockItemNoEncontrado) as exc:
+        _a_codigo_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.patch(
+    f"{RUTA_STOCK}/{{stock_id}}/bolsas/{{bolsa_id}}",
+    response_model=BolsaPanelRead,
+)
+def actualizar_bolsa(
+    stock_id: str,
+    bolsa_id: int,
+    datos: BolsaPanelUpdate,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> BolsaPanelRead:
+    """Edita el estado, los kilos o el código de una bolsa."""
+    try:
+        return services.actualizar_bolsa(db, stock_id, bolsa_id, datos)
+    except (
+        services.StockItemInvalido,
+        services.StockItemNoEncontrado,
+        services.BolsaNoEncontrada,
+        services.BolsaNoPerteneceAlStock,
+    ) as exc:
+        _a_codigo_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete(
+    f"{RUTA_STOCK}/{{stock_id}}/bolsas/{{bolsa_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def eliminar_bolsa(
+    stock_id: str,
+    bolsa_id: int,
+    db: Session = Depends(get_db),
+    _: TokenData = Depends(get_current_user),
+) -> Response:
+    """Elimina una bolsa del café indicado."""
+    try:
+        services.eliminar_bolsa(db, stock_id, bolsa_id)
+    except (
+        services.StockItemInvalido,
+        services.StockItemNoEncontrado,
+        services.BolsaNoEncontrada,
+        services.BolsaNoPerteneceAlStock,
+    ) as exc:
+        _a_codigo_http(exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

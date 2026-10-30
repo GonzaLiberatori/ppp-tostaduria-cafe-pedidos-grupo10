@@ -115,7 +115,7 @@ class Pedido(Base):
         Integer, ForeignKey("cliente.persona_id"), nullable=False
     )
     empleado_persona_id = Column(
-        Integer, ForeignKey("empleado.persona_id"), nullable=False
+        Integer, ForeignKey("empleado.persona_id"), nullable=True
     )
 
     cliente = relationship("Cliente", back_populates="pedidos")
