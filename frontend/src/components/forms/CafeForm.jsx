@@ -43,7 +43,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
         descripcion: initialData.descripcion || '',
         mezcla: initialData.mezcla
           ? initialData.mezcla
-              .filter(m => cafes.some(cafe => cafe.id === m.cafeId))
+              .filter(m => cafes.some(cafe => cafe.id === Number(m.cafeId)))
               .map(m => ({ ...m }))
           : [],
       })
@@ -67,26 +67,26 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
   }
 
   const mezclaSeleccionada = formData.mezcla
-    .map(m => ({ ...m, cafe: cafes.find(c => c.id === m.cafeId) }))
+    .map(m => ({ ...m, cafe: cafes.find(c => c.id === Number(m.cafeId)) }))
     .filter(m => m.cafe)
 
   const totalPorcentaje = formData.mezcla.reduce((sum, m) => sum + (Number(m.porcentaje) || 0), 0)
 
   const recalcularMezcla = (cafeIds) => {
-    const seleccionados = cafeIds.map(id => cafes.find(c => c.id === id)).filter(Boolean)
+    const seleccionados = cafeIds.map(id => cafes.find(c => c.id === Number(id))).filter(Boolean)
     return sugerirPorcentajes(seleccionados).map(({ cafeId, porcentaje }) => ({ cafeId, porcentaje }))
   }
 
   const agregarComponente = () => {
     if (!nuevoComponente) return
-    const ids = [...formData.mezcla.map(m => m.cafeId), nuevoComponente]
+    const ids = [...formData.mezcla.map(m => m.cafeId), Number(nuevoComponente)]
     setFormData(prev => ({ ...prev, mezcla: recalcularMezcla(ids) }))
     setNuevoComponente('')
     setErrors(prev => ({ ...prev, mezcla: '' }))
   }
 
   const quitarComponente = (cafeId) => {
-    const ids = formData.mezcla.filter(m => m.cafeId !== cafeId).map(m => m.cafeId)
+    const ids = formData.mezcla.filter(m => m.cafeId !== Number(cafeId)).map(m => m.cafeId)
     setFormData(prev => ({
       ...prev,
       mezcla: ids.length === 0 ? [] : recalcularMezcla(ids),
@@ -97,7 +97,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
     const valor = Math.min(100, Math.max(0, Number(porcentaje) || 0))
     setFormData(prev => ({
       ...prev,
-      mezcla: prev.mezcla.map(m => (m.cafeId === cafeId ? { ...m, porcentaje: valor } : m)),
+      mezcla: prev.mezcla.map(m => (m.cafeId === Number(cafeId) ? { ...m, porcentaje: valor } : m)),
     }))
   }
 

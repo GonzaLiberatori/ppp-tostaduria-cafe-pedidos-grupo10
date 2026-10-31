@@ -2,10 +2,8 @@ import { useState, useEffect } from 'react'
 import Input from '../ui/Input'
 import Select from '../ui/Select'
 import Modal from '../ui/Modal'
-import SegmentedToggle from '../ui/SegmentedToggle'
-import { ESTADOS_LOTE, TIPOS_CAFE, TIPOS_LOTE } from '../../data/constants'
+import { ESTADOS_LOTE, TIPOS_LOTE } from '../../data/constants'
 import { formatearFecha } from '../../utils/formatters'
-import { nombreCafe, origenCafe } from '../../utils/cafes'
 
 const FORM_INICIAL = {
   cafeId: '',
@@ -21,7 +19,6 @@ const FORM_INICIAL = {
 
 export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeIdInicial, cafes = [], ordenesTueste = [] }) {
   const [formData, setFormData] = useState(FORM_INICIAL)
-  const [tipoProducto, setTipoProducto] = useState('simple')
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [apiError, setApiError] = useState(null)
@@ -29,8 +26,6 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
   useEffect(() => {
     if (!isOpen) return
     if (initialData) {
-      const cafe = cafes.find(c => c.id === cafeIdInicial)
-      setTipoProducto(cafe?.tipoProducto || 'simple')
       setFormData({
         cafeId: cafeIdInicial || '',
         tipo: initialData.tipo || 'verde',
@@ -43,16 +38,11 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
         ordenTuesteId: initialData.ordenTuesteId || '',
       })
     } else {
-      const cafe = cafes.find(c => c.id === cafeIdInicial)
-      setTipoProducto(cafe?.tipoProducto || 'simple')
       setFormData({ ...FORM_INICIAL, cafeId: cafeIdInicial || '' })
     }
     setErrors({})
     setApiError(null)
-  }, [isOpen, initialData, cafeIdInicial, cafes])
-
-  const cafesFiltrados = cafes.filter(cafe => cafe.tipoProducto === tipoProducto)
-  const cafeSeleccionado = cafes.find(cafe => cafe.id === formData.cafeId)
+  }, [isOpen, initialData, cafeIdInicial])
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -60,19 +50,16 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
     if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }))
   }
 
-  const handleTipoProducto = (tipo) => {
-    setTipoProducto(tipo)
-    setFormData(prev => {
-      const cafeActual = cafes.find(c => c.id === prev.cafeId)
-      return { ...prev, cafeId: cafeActual?.tipoProducto === tipo ? prev.cafeId : '' }
-    })
-    setErrors(prev => ({ ...prev, cafeId: '' }))
-  }
-
   const validate = () => {
     const newErrors = {}
-    const cafe = cafes.find(c => c.id === formData.cafeId)
-    if (!cafe) newErrors.cafeId = 'Seleccioná el café del lote'
+    const isEdicion = !!initialData
+    
+    // En modo edición, no validar cafeId (el origen ya está definido)
+    if (!isEdicion) {
+      const cafe = cafes.find(c => c.id === Number(formData.cafeId))
+      if (!cafe) newErrors.cafeId = 'Seleccioná el café del lote'
+    }
+    
     if (!formData.vencimiento) newErrors.vencimiento = 'La fecha de vencimiento es obligatoria'
     if (!formData.kilos || parseFloat(formData.kilos) <= 0) newErrors.kilos = 'Los kilos deben ser mayores a 0'
     if (!formData.ubicacion.trim()) newErrors.ubicacion = 'La ubicación es obligatoria'
@@ -100,9 +87,10 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
     setSubmitting(true)
     setApiError(null)
     
+    const isEdicion = !!initialData
+    
     try {
-      await onSubmit({
-        cafeId: formData.cafeId,
+      const payload = {
         tipo: formData.tipo,
         estado: formData.estado,
         vencimiento: `${formData.vencimiento}T12:00:00.000Z`,
@@ -111,7 +99,14 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
         ubicacion: formData.ubicacion.trim(),
         observaciones: formData.observaciones.trim(),
         ordenTuesteId: formData.ordenTuesteId || null,
-      }, initialData?.id, cafeIdInicial)
+      }
+      
+      // Solo enviar cafeId en modo creación
+      if (!isEdicion) {
+        payload.cafeId = formData.cafeId
+      }
+      
+      await onSubmit(payload, initialData?.id, cafeIdInicial)
     } catch (err) {
       setApiError(err.message || 'Error al guardar el lote')
     } finally {
@@ -135,64 +130,6 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
             <p className="text-sm text-red-700 dark:text-red-300">{apiError}</p>
           </div>
         )}
-        <div className="rounded-xl border border-coffee-500/20 bg-coffee-500/5 p-4">
-          <h3 className="mb-3 flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
-            <span className="h-2 w-2 rounded-full bg-coffee-500"></span>
-            Café asociado
-          </h3>
-
-          <SegmentedToggle
-            value={tipoProducto}
-            onChange={handleTipoProducto}
-            options={TIPOS_CAFE}
-            label="Categoría"
-          />
-
-          <div className="mt-3">
-            <Select
-              label={tipoProducto === 'blend' ? 'Blend' : 'Café simple'}
-              name="cafeId"
-              value={formData.cafeId}
-              onChange={handleChange}
-              options={cafesFiltrados.map(cafe => ({
-                value: cafe.id,
-                label: `${nombreCafe(cafe)}${tipoProducto === 'simple' ? ` — ${origenCafe(cafe)}` : ''}`,
-              }))}
-              placeholder={tipoProducto === 'blend' ? 'Seleccionar blend' : 'Seleccionar café simple'}
-              error={errors.cafeId}
-            />
-          </div>
-
-          {/* Campos derivados del café elegido: se completan solos y no se editan */}
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <Input
-              label={tipoProducto === 'blend' ? 'ID Blend' : 'ID Café'}
-              value={cafeSeleccionado?.id || ''}
-              placeholder="Se completa al elegir el café"
-              readOnly
-              tabIndex={-1}
-              aria-readonly="true"
-              title={cafeSeleccionado?.id || ''}
-              className="cursor-not-allowed bg-[var(--color-bg-tertiary)] font-mono text-xs text-[var(--color-text-secondary)]"
-            />
-            <Input
-              label="Tipo de café"
-              value={
-                cafeSeleccionado
-                  ? cafeSeleccionado.tipoProducto === 'blend' ? 'Blend' : 'Simple'
-                  : ''
-              }
-              placeholder="Se completa al elegir el café"
-              readOnly
-              tabIndex={-1}
-              aria-readonly="true"
-              className="cursor-not-allowed bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"
-            />
-          </div>
-          <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-            ID y tipo de café se completan automáticamente con el café seleccionado y no son editables.
-          </p>
-        </div>
 
         <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4">
           <h3 className="mb-3 flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
@@ -201,13 +138,15 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
           </h3>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <Select
-              label="Tipo de lote *"
-              name="tipo"
-              value={formData.tipo}
-              onChange={handleChange}
-              options={TIPOS_LOTE}
-            />
+            {!initialData && (
+              <Select
+                label="Tipo de lote *"
+                name="tipo"
+                value={formData.tipo}
+                onChange={handleChange}
+                options={TIPOS_LOTE}
+              />
+            )}
             <Select
               label="Estado *"
               name="estado"
@@ -256,19 +195,21 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
             />
           </div>
 
-          <div className="mt-3">
-            <Select
-              label="Orden de tueste"
-              name="ordenTuesteId"
-              value={formData.ordenTuesteId}
-              onChange={handleChange}
-              options={ordenesTueste.map(orden => ({
-                value: orden.id,
-                label: `${orden.id} · ${formatearFecha(orden.fecha)} · ${orden.estado}`,
-              }))}
-              placeholder="Sin orden asociada"
-            />
-          </div>
+          {!initialData && (
+            <div className="mt-3">
+              <Select
+                label="Orden de tueste"
+                name="ordenTuesteId"
+                value={formData.ordenTuesteId}
+                onChange={handleChange}
+                options={ordenesTueste.map(orden => ({
+                  value: orden.id,
+                  label: `${orden.id} · ${formatearFecha(orden.fecha)} · ${orden.estado}`,
+                }))}
+                placeholder="Sin orden asociada"
+              />
+            </div>
+          )}
 
           <div className="mt-3">
             <Input
