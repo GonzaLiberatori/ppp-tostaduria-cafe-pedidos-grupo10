@@ -350,7 +350,7 @@ export default function Pedidos() {
                     <tbody>
                       {viewDetail.items.map((item, index) => (
                         <tr key={index}>
-                          <td>{item.variedad}</td>
+                          <td>{item.nombre || item.variedad || 'Café'}</td>
                           <td className="text-right font-mono tabular-nums">{formatearKilos(item.kilos)}</td>
                           <td className="text-right font-mono tabular-nums">{formatearMoneda(item.precioKg)}</td>
                           <td className="text-right font-mono tabular-nums font-medium">{formatearMoneda(item.kilos * item.precioKg)}</td>

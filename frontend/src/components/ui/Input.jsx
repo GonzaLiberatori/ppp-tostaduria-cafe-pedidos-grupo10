@@ -6,11 +6,14 @@ const Input = forwardRef(({
   help, 
   className = '', 
   id, 
+  multiline = false,
+  rows = 3,
   ...props 
 }, ref) => {
   const inputId = id || label?.toLowerCase().replace(/\s+/g, '-')
   const errorId = `${inputId}-error`
   const helpId = `${inputId}-help`
+  const clases = `input ${error ? 'input-error' : ''} ${className}`
 
   return (
     <div className="form-group">
@@ -19,14 +22,26 @@ const Input = forwardRef(({
           {label}
         </label>
       )}
-      <input
-        ref={ref}
-        id={inputId}
-        className={`input ${error ? 'input-error' : ''} ${className}`}
-        aria-invalid={error ? 'true' : 'false'}
-        aria-describedby={error ? errorId : help ? helpId : undefined}
-        {...props}
-      />
+      {multiline ? (
+        <textarea
+          ref={ref}
+          id={inputId}
+          rows={rows}
+          className={`${clases} resize-y`}
+          aria-invalid={error ? 'true' : 'false'}
+          aria-describedby={error ? errorId : help ? helpId : undefined}
+          {...props}
+        />
+      ) : (
+        <input
+          ref={ref}
+          id={inputId}
+          className={clases}
+          aria-invalid={error ? 'true' : 'false'}
+          aria-describedby={error ? errorId : help ? helpId : undefined}
+          {...props}
+        />
+      )}
       {error && (
         <p id={errorId} className="form-error" role="alert">
           {error}

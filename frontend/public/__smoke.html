@@ -1,0 +1,10 @@
+<!doctype html>
+<html><body><script>
+try {
+  localStorage.setItem('cafe-finca-auth', JSON.stringify({ username: 'admin', role: 'admin', nombre: 'Administrador' }))
+  localStorage.removeItem('cafe-finca-cafes-v2')
+  window.location.replace('/stock')
+} catch (e) {
+  document.body.textContent = 'ERROR ' + e.message
+}
+</script></body></html>

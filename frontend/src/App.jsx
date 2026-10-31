@@ -4,12 +4,19 @@ import { ThemeProvider } from './context/ThemeContext'
 import { DataProvider } from './context/DataContext'
 import { ToastProvider, Toaster } from './hooks/useToast.jsx'
 import Layout from './components/layout/Layout'
+import LayoutCliente from './components/layout/LayoutCliente'
 import Login from './pages/Login'
+import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Stock from './pages/Stock'
 import Clientes from './pages/Clientes'
 import Pedidos from './pages/Pedidos'
 import Contabilidad from './pages/Contabilidad'
+import InicioCliente from './pages/cliente/InicioCliente'
+import ComprarCliente from './pages/cliente/Comprar'
+import MisPedidosCliente from './pages/cliente/MisPedidos'
+import PerfilCliente from './pages/cliente/PerfilCliente'
+import SuscripcionesCliente from './pages/cliente/Suscripciones'
 import './styles/globals.css'
 
 function ProtectedRoute({ children, allowedRoles }) {
@@ -46,7 +53,7 @@ function PublicRoute({ children }) {
   }
   
   if (user) {
-    return <Navigate to="/" replace />
+    return <Navigate to={user.role === 'cliente' ? '/cliente' : '/'} replace />
   }
   
   return children
@@ -60,10 +67,16 @@ function AppRoutes() {
           <Login />
         </PublicRoute>
       } />
+
+      <Route path="/register" element={
+        <PublicRoute>
+          <Register />
+        </PublicRoute>
+      } />
       
       <Route element={<Layout />}>
         <Route path="/" element={
-          <ProtectedRoute>
+          <ProtectedRoute allowedRoles={['admin', 'empleado', 'vendedor']}>
             <Dashboard />
           </ProtectedRoute>
         } />
@@ -85,6 +98,34 @@ function AppRoutes() {
         <Route path="/contabilidad" element={
           <ProtectedRoute allowedRoles={['admin']}>
             <Contabilidad />
+          </ProtectedRoute>
+        } />
+      </Route>
+      
+      <Route element={<LayoutCliente />}>
+        <Route path="/cliente" element={
+          <ProtectedRoute allowedRoles={['cliente']}>
+            <InicioCliente />
+          </ProtectedRoute>
+        } />
+        <Route path="/cliente/comprar" element={
+          <ProtectedRoute allowedRoles={['cliente']}>
+            <ComprarCliente />
+          </ProtectedRoute>
+        } />
+        <Route path="/cliente/mis-pedidos" element={
+          <ProtectedRoute allowedRoles={['cliente']}>
+            <MisPedidosCliente />
+          </ProtectedRoute>
+        } />
+        <Route path="/cliente/perfil" element={
+          <ProtectedRoute allowedRoles={['cliente']}>
+            <PerfilCliente />
+          </ProtectedRoute>
+        } />
+        <Route path="/cliente/suscripciones" element={
+          <ProtectedRoute allowedRoles={['cliente']}>
+            <SuscripcionesCliente />
           </ProtectedRoute>
         } />
       </Route>

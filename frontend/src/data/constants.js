@@ -1,6 +1,16 @@
-export const TIPOS_STOCK = [
-  { value: 'verde', label: 'Café Verde' },
-  { value: 'tostado', label: 'Café Tostado' },
+export const TIPOS_CAFE = [
+  { value: 'simple', label: 'Simple' },
+  { value: 'blend', label: 'Blend' },
+]
+
+export const TIPOS_LOTE = [
+  { value: 'verde', label: 'Café verde', color: 'success' },
+  { value: 'tostado', label: 'Café tostado', color: 'coffee' },
+]
+
+export const ESTADOS_LOTE = [
+  { value: 'abierto', label: 'Abierto', color: 'warning' },
+  { value: 'cerrado', label: 'Cerrado', color: 'success' },
 ]
 
 export const ESTADOS_PEDIDO = [
@@ -28,11 +38,6 @@ export const CATEGORIAS_GASTO = [
   { value: 'Otro', label: 'Otro' },
 ]
 
-export const ESTADOS_BOLSA = [
-  { value: 'cerrada', label: 'Cerrada', color: 'success' },
-  { value: 'abierta', label: 'Abierta', color: 'warning' },
-]
-
 export const ESTADO_COLORS = {
   Pendiente: 'badge-warning',
   Listo: 'badge-info',
@@ -51,10 +56,22 @@ export const CATEGORIA_GASTO_COLORS = {
   Otro: 'badge-success',
 }
 
-export const ESTADO_BOLSA_COLORS = {
-  cerrada: 'badge-success',
-  abierta: 'badge-warning',
-}
+export const MEDIOS_PAGO = [
+  { value: 'transferencia', label: 'Transferencia bancaria' },
+  { value: 'tarjeta', label: 'Tarjeta de crédito/débito' },
+  { value: 'efectivo', label: 'Efectivo' },
+]
+
+export const FRECUENCIA_SUSCRIPCION = [
+  { value: 'semanal', label: 'Semanal' },
+  { value: 'mensual', label: 'Mensual' },
+]
+
+export const ESTADO_PEDIDO_CLIENTE = [
+  { value: 'Pendiente', label: 'Pendiente', color: 'warning' },
+  { value: 'Listo', label: 'Listo para retirar', color: 'info' },
+  { value: 'Entregado', label: 'Entregado', color: 'success' },
+]
 
 export const MESES_ES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
