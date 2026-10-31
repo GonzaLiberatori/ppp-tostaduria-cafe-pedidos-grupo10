@@ -24,6 +24,7 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
   const [tipoProducto, setTipoProducto] = useState('simple')
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [apiError, setApiError] = useState(null)
 
   useEffect(() => {
     if (!isOpen) return
@@ -47,6 +48,7 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
       setFormData({ ...FORM_INICIAL, cafeId: cafeIdInicial || '' })
     }
     setErrors({})
+    setApiError(null)
   }, [isOpen, initialData, cafeIdInicial, cafes])
 
   const cafesFiltrados = cafes.filter(cafe => cafe.tipoProducto === tipoProducto)
@@ -74,30 +76,47 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
     if (!formData.vencimiento) newErrors.vencimiento = 'La fecha de vencimiento es obligatoria'
     if (!formData.kilos || parseFloat(formData.kilos) <= 0) newErrors.kilos = 'Los kilos deben ser mayores a 0'
     if (!formData.ubicacion.trim()) newErrors.ubicacion = 'La ubicación es obligatoria'
-    if (formData.humedad !== '' && (isNaN(parseFloat(formData.humedad)) || parseFloat(formData.humedad) < 0 || parseFloat(formData.humedad) > 100)) {
+    
+    // Humedad es obligatoria (el backend la requiere)
+    if (formData.humedad === '' || formData.humedad === null) {
+      newErrors.humedad = 'La humedad es obligatoria'
+    } else if (isNaN(parseFloat(formData.humedad)) || parseFloat(formData.humedad) < 0 || parseFloat(formData.humedad) > 100) {
       newErrors.humedad = 'La humedad debe estar entre 0 y 100'
     }
+    
+    // Para lotes TOSTADO, la orden de tueste es obligatoria
+    if (formData.tipo === 'tostado' && !formData.ordenTuesteId) {
+      newErrors.ordenTuesteId = 'La orden de tueste es obligatoria para lotes tostados'
+    }
+    
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e?.preventDefault()
     if (!validate()) return
 
     setSubmitting(true)
-    onSubmit({
-      cafeId: formData.cafeId,
-      tipo: formData.tipo,
-      estado: formData.estado,
-      vencimiento: `${formData.vencimiento}T12:00:00.000Z`,
-      humedad: formData.humedad === '' ? null : parseFloat(formData.humedad),
-      kilos: parseFloat(formData.kilos),
-      ubicacion: formData.ubicacion.trim(),
-      observaciones: formData.observaciones.trim(),
-      ordenTuesteId: formData.ordenTuesteId || null,
-    }, initialData?.id, cafeIdInicial)
-    setSubmitting(false)
+    setApiError(null)
+    
+    try {
+      await onSubmit({
+        cafeId: formData.cafeId,
+        tipo: formData.tipo,
+        estado: formData.estado,
+        vencimiento: `${formData.vencimiento}T12:00:00.000Z`,
+        humedad: parseFloat(formData.humedad),
+        kilos: parseFloat(formData.kilos),
+        ubicacion: formData.ubicacion.trim(),
+        observaciones: formData.observaciones.trim(),
+        ordenTuesteId: formData.ordenTuesteId || null,
+      }, initialData?.id, cafeIdInicial)
+    } catch (err) {
+      setApiError(err.message || 'Error al guardar el lote')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -111,6 +130,11 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
       size="lg"
     >
       <form onSubmit={handleSubmit} className="space-y-5">
+        {apiError && (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3">
+            <p className="text-sm text-red-700 dark:text-red-300">{apiError}</p>
+          </div>
+        )}
         <div className="rounded-xl border border-coffee-500/20 bg-coffee-500/5 p-4">
           <h3 className="mb-3 flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
             <span className="h-2 w-2 rounded-full bg-coffee-500"></span>

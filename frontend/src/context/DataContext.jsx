@@ -1,17 +1,35 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { mockCafes, mockOrdenesTueste, mockClientes, mockPedidos, mockGastos } from '../data/mockData'
+import { mockOrdenesTueste, mockClientes, mockPedidos, mockGastos } from '../data/mockData'
 import { kilosPorTipo } from '../utils/cafes'
+import {
+  listarTiposDeCafe,
+  listarBlends,
+  listarTodosLosLotes,
+  crearTipoDeCafe,
+  actualizarTipoDeCafe,
+  eliminarTipoDeCafe,
+  crearBlend,
+  actualizarBlend,
+  eliminarBlend,
+  crearLote,
+  actualizarLote,
+  eliminarLote,
+} from '../api/inventario'
+import {
+  ensamblarCafes,
+  cafeSimpleToBackend,
+  cafeBlendToBackend,
+  loteToBackendCreate,
+  loteToBackendUpdate,
+} from '../api/mappers'
 
 const DataContext = createContext(null)
 
 const STORAGE_KEYS = {
-  CAFES: 'cafe-finca-cafes-v2',
   CLIENTES: 'cafe-finca-clientes',
   PEDIDOS: 'cafe-finca-pedidos',
   GASTOS: 'cafe-finca-gastos',
 }
-
-const LEGACY_STOCK_KEY = 'cafe-finca-stock'
 
 function loadFromStorage(key, fallback) {
   try {
@@ -69,93 +87,163 @@ function consumirLotesFIFO(lotes = [], kilosAConsumir) {
 }
 
 export function DataProvider({ children }) {
-  const [cafes, setCafes] = useState(() => loadFromStorage(STORAGE_KEYS.CAFES, mockCafes))
+  const [cafes, setCafes] = useState([])
   const [clientes, setClientes] = useState(() => loadFromStorage(STORAGE_KEYS.CLIENTES, mockClientes))
   const [pedidos, setPedidos] = useState(() => loadFromStorage(STORAGE_KEYS.PEDIDOS, mockPedidos))
   const [gastos, setGastos] = useState(() => loadFromStorage(STORAGE_KEYS.GASTOS, mockGastos))
   const [ordenesTueste] = useState(mockOrdenesTueste)
-  const [isLoaded, setIsLoaded] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
-  useEffect(() => {
-    // El modelo anterior de stock (cafés con bolsas) queda descartado.
-    localStorage.removeItem(LEGACY_STOCK_KEY)
-    setIsLoaded(true)
-  }, [])
+  // Cargar inventario desde la API al montar
+  const cargarInventario = useCallback(async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      // 1. Cargar tipos de café y blends en paralelo
+      const [tiposDeCafe, blends] = await Promise.all([
+        listarTiposDeCafe(),
+        listarBlends(),
+      ])
 
-  useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.CAFES, cafes) }, [cafes, isLoaded])
-  useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.CLIENTES, clientes) }, [clientes, isLoaded])
-  useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.PEDIDOS, pedidos) }, [pedidos, isLoaded])
-  useEffect(() => { if (isLoaded) saveToStorage(STORAGE_KEYS.GASTOS, gastos) }, [gastos, isLoaded])
-
-  // --- Café Actions ---
-  const addCafe = useCallback((cafe) => {
-    const nuevoCafe = {
-      ...cafe,
-      id: crypto.randomUUID(),
-      fechaIngreso: new Date().toISOString(),
-      lotes: [],
-    }
-    setCafes(prev => [...prev, nuevoCafe])
-    return nuevoCafe
-  }, [])
-
-  const updateCafe = useCallback((id, updates) => {
-    setCafes(prev => prev.map(cafe => (cafe.id === id ? { ...cafe, ...updates } : cafe)))
-  }, [])
-
-  const deleteCafe = useCallback((id) => {
-    setCafes(prev => prev.filter(cafe => cafe.id !== id))
-  }, [])
-
-  // --- Lote Actions ---
-  const addLote = useCallback((cafeId, lote) => {
-    const nuevoLote = {
-      ...lote,
-      id: crypto.randomUUID(),
-      fechaCreacion: new Date().toISOString(),
-    }
-    setCafes(prev => prev.map(cafe => (
-      cafe.id === cafeId ? { ...cafe, lotes: [...(cafe.lotes || []), nuevoLote] } : cafe
-    )))
-    return nuevoLote
-  }, [])
-
-  const updateLote = useCallback((cafeId, loteId, updates) => {
-    setCafes(prev => {
-      const origen = prev.find(cafe => cafe.id === cafeId)
-      const lote = origen?.lotes?.find(l => l.id === loteId)
-      if (!origen || !lote) return prev
-
-      const { cafeId: cafeDestinoId, ...resto } = updates
-      const loteActualizado = { ...lote, ...resto }
-
-      if (cafeDestinoId && cafeDestinoId !== cafeId) {
-        return prev.map(cafe => {
-          if (cafe.id === cafeId) {
-            return { ...cafe, lotes: cafe.lotes.filter(l => l.id !== loteId) }
-          }
-          if (cafe.id === cafeDestinoId) {
-            return { ...cafe, lotes: [...(cafe.lotes || []), loteActualizado] }
-          }
-          return cafe
-        })
+      // 2. Cargar lotes para cada tipo de café y blend
+      // El backend requiere XOR: tipo_de_cafe_id o blend_id, no ambos ni ninguno
+      const todosLosLotes = []
+      
+      for (const tipo of tiposDeCafe) {
+        try {
+          const lotesDelTipo = await listarTodosLosLotes([tipo], [])
+          todosLosLotes.push(...lotesDelTipo)
+        } catch (err) {
+          console.error(`Error cargando lotes para tipo ${tipo.id}:`, err)
+        }
       }
 
-      return prev.map(cafe => (
-        cafe.id === cafeId
-          ? { ...cafe, lotes: cafe.lotes.map(l => (l.id === loteId ? loteActualizado : l)) }
-          : cafe
-      ))
-    })
+      for (const blend of blends) {
+        try {
+          const lotesDelBlend = await listarTodosLosLotes([], [blend])
+          todosLosLotes.push(...lotesDelBlend)
+        } catch (err) {
+          console.error(`Error cargando lotes para blend ${blend.id}:`, err)
+        }
+      }
+
+      // 3. Ensamblar cafés unificados
+      const cafesUnificados = ensamblarCafes(tiposDeCafe, blends, todosLosLotes)
+      setCafes(cafesUnificados)
+    } catch (err) {
+      console.error('Error cargando inventario:', err)
+      setError(err.message || 'Error al cargar el inventario')
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
-  const deleteLote = useCallback((cafeId, loteId) => {
-    setCafes(prev => prev.map(cafe => (
-      cafe.id === cafeId
-        ? { ...cafe, lotes: (cafe.lotes || []).filter(l => l.id !== loteId) }
-        : cafe
-    )))
-  }, [])
+  useEffect(() => {
+    cargarInventario()
+  }, [cargarInventario])
+
+  // Guardar en localStorage solo clientes, pedidos, gastos
+  useEffect(() => { saveToStorage(STORAGE_KEYS.CLIENTES, clientes) }, [clientes])
+  useEffect(() => { saveToStorage(STORAGE_KEYS.PEDIDOS, pedidos) }, [pedidos])
+  useEffect(() => { saveToStorage(STORAGE_KEYS.GASTOS, gastos) }, [gastos])
+
+  // --- Café Actions ---
+  const addCafe = useCallback(async (cafe) => {
+    try {
+      let response
+      if (cafe.tipoProducto === 'simple') {
+        const payload = cafeSimpleToBackend(cafe)
+        response = await crearTipoDeCafe(payload)
+      } else {
+        const payload = cafeBlendToBackend(cafe)
+        response = await crearBlend(payload)
+      }
+
+      // Recargar inventario para obtener los datos actualizados
+      await cargarInventario()
+      
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cargarInventario])
+
+  const updateCafe = useCallback(async (id, updates) => {
+    try {
+      const cafe = cafes.find(c => c.id === id)
+      if (!cafe) throw new Error('Café no encontrado')
+
+      let response
+      if (cafe.tipoProducto === 'simple') {
+        const payload = cafeSimpleToBackend({ ...cafe, ...updates })
+        response = await actualizarTipoDeCafe(id, payload)
+      } else {
+        const payload = cafeBlendToBackend({ ...cafe, ...updates })
+        response = await actualizarBlend(id, payload)
+      }
+
+      await cargarInventario()
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cafes, cargarInventario])
+
+  const deleteCafe = useCallback(async (id) => {
+    try {
+      const cafe = cafes.find(c => c.id === id)
+      if (!cafe) throw new Error('Café no encontrado')
+
+      if (cafe.tipoProducto === 'simple') {
+        await eliminarTipoDeCafe(id)
+      } else {
+        await eliminarBlend(id)
+      }
+
+      await cargarInventario()
+    } catch (err) {
+      throw err
+    }
+  }, [cafes, cargarInventario])
+
+  // --- Lote Actions ---
+  const addLote = useCallback(async (cafeId, lote) => {
+    try {
+      const cafePadre = cafes.find(c => c.id === cafeId)
+      if (!cafePadre) throw new Error('Café padre no encontrado')
+
+      const payload = loteToBackendCreate(lote, cafePadre)
+      const response = await crearLote(payload)
+
+      await cargarInventario()
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cafes, cargarInventario])
+
+  const updateLote = useCallback(async (cafeId, loteId, updates) => {
+    try {
+      const payload = loteToBackendUpdate(updates)
+      const response = await actualizarLote(loteId, payload)
+
+      await cargarInventario()
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cargarInventario])
+
+  const deleteLote = useCallback(async (cafeId, loteId) => {
+    try {
+      await eliminarLote(loteId)
+      await cargarInventario()
+    } catch (err) {
+      throw err
+    }
+  }, [cargarInventario])
 
   // --- Consumo de stock (ventas) ---
   const previewConsumoFIFO = useCallback((cafeId, kilos) => {
@@ -171,7 +259,7 @@ export function DataProvider({ children }) {
     const { lotes, consumo, faltante } = consumirLotesFIFO(cafe.lotes || [], kilos)
     setCafes(prev => prev.map(c => (c.id === cafeId ? { ...c, lotes } : c)))
     return { consumo, faltante }
-  }, [cafes])
+  }, [])
 
   // --- Cliente Actions ---
   const addCliente = useCallback((cliente) => {
@@ -316,7 +404,8 @@ export function DataProvider({ children }) {
     clientes,
     pedidos,
     gastos,
-    isLoaded,
+    loading,
+    error,
     // Cafés
     addCafe,
     updateCafe,
@@ -353,6 +442,8 @@ export function DataProvider({ children }) {
     // Contabilidad
     getContabilidadMensual,
     getTotalesGenerales,
+    // Refresh
+    cargarInventario,
   }
 
   return (
