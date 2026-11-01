@@ -4,21 +4,19 @@ Consultas puras: sin reglas de negocio y sin commits. Tanto la decisión de qué
 operaciones proceden como la frontera transaccional viven en ``services.py``.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from decimal import Decimal
-
-from datetime import datetime
-
 from app.modules.inventario.models import (
     Blend,
     BlendHasTipoDeCafe,
     Lote,
     LoteEstado,
+    LoteTipo,
     TipoDeCafe,
 )
 from app.modules.inventario.schemas import (
@@ -302,6 +300,25 @@ def listar_lotes(
         query = query.where(Lote.blend_id == blend_id)
     
     return db.execute(query.order_by(Lote.id)).scalars().all()
+
+
+def listar_lotes_verdes_fifo(db: Session, tipo_de_cafe_id: int) -> list[Lote]:
+    """Devuelve los lotes VERDE abiertos con stock, del más antiguo al más nuevo.
+
+    El criterio FIFO es la fecha de vencimiento y, para desempatar, el ``id``
+    de alta del lote. Los lotes cerrados o sin stock no participan del consumo.
+    """
+    return db.execute(
+        select(Lote)
+        .where(
+            Lote.tipo_de_cafe_id == tipo_de_cafe_id,
+            Lote.tipo == LoteTipo.VERDE,
+            Lote.estado == LoteEstado.ABIERTO,
+            Lote.kg_disponibles > 0,
+        )
+        .order_by(Lote.fecha_vencimiento, Lote.id)
+        .with_for_update()
+    ).scalars().all()
 
 
 def listar_tipos_de_cafe(db: Session) -> list[TipoDeCafe]:

@@ -80,7 +80,12 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ]
 
 
 # Instancia singleton para usar en toda la aplicación

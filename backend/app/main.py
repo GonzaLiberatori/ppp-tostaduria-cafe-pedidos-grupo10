@@ -13,7 +13,11 @@ from app.modules.clientes.router import router as clientes_router
 from app.modules.gastos.router import router as gastos_router
 from app.modules.inventario.router import router as inventario_router
 from app.modules.pedidos.router import router as pedidos_router
+<<<<<<< HEAD
 from app.modules.ventas.router import router as ventas_router
+=======
+from app.modules.produccion.router import router as produccion_router
+>>>>>>> origin/feature/tueste
 
 # ---------------------------------------------------------------------------
 # Instancia de FastAPI
@@ -48,6 +52,10 @@ app.include_router(gastos_router, prefix=settings.API_V1_STR)
 app.include_router(
     inventario_router,
     prefix=f"{settings.API_V1_STR}/inventario",
+)
+app.include_router(
+    produccion_router,
+    prefix=f"{settings.API_V1_STR}/produccion",
 )
 
 

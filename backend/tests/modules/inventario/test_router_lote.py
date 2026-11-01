@@ -91,15 +91,15 @@ def test_crear_devuelve_201_y_deriva_kg_disponibles(client, db, origen):
 
     assert respuesta.status_code == 201
     assert cuerpo["id"] > 0
-    assert cuerpo["kg_reales"] == "59.80"
-    assert cuerpo["kg_disponibles"] == "59.80"
+    assert cuerpo["kg_reales"] == "59.800"
+    assert cuerpo["kg_disponibles"] == "59.800"
 
 
 def test_crear_con_kg_reales_en_cero(client, db, origen):
     cuerpo = client.post("/lotes", json={**PAYLOAD, "kg_reales": "0"}).json()
 
-    assert cuerpo["kg_reales"] == "0.00"
-    assert cuerpo["kg_disponibles"] == "0.00"
+    assert cuerpo["kg_reales"] == "0.000"
+    assert cuerpo["kg_disponibles"] == "0.000"
 
 
 def test_crear_con_origen_inexistente_devuelve_404(client, db, origen):
@@ -162,7 +162,7 @@ def test_leer_devuelve_200_con_las_claves_foraneas(client, db, origen):
     assert cuerpo["tipo_de_cafe_id"] == origen
     assert cuerpo["blend_id"] is None
     assert cuerpo["orden_tueste_id"] is None
-    assert cuerpo["kg_disponibles"] == "59.80"
+    assert cuerpo["kg_disponibles"] == "59.800"
 
 
 def test_leer_con_id_inexistente_devuelve_404(client, db, origen):
@@ -179,7 +179,7 @@ def test_editar_devuelve_200_y_cambia_solo_lo_enviado(client, db, origen):
 
     assert cuerpo["estado"] == "CERRADO"
     assert cuerpo["ubicacion_fisica"] == "PASILLO-01"
-    assert cuerpo["kg_reales"] == "59.80"
+    assert cuerpo["kg_reales"] == "59.800"
 
 
 def test_editar_con_id_inexistente_devuelve_404(client, db, origen):
