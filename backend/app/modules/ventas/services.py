@@ -1,18 +1,31 @@
 """Reglas de negocio y frontera transaccional del módulo de ventas.
 
-``registrar_venta`` y ``anular_venta`` son los únicos puntos que hacen
-``commit``. Ninguna operación de este módulo modifica stock ni el saldo de la
-cuenta corriente: eso sigue siendo responsabilidad del módulo de pedidos.
+``registrar_venta``, ``cobrar_venta`` y ``anular_venta`` hacen ``commit`` porque
+la venta misma es la operación. ``registrar_venta_de_entrega`` no lo hace: la
+entrega es un caso de uso de ``pedidos`` y el commit lo cierra
+``PedidoService.cambiar_estado_pedido``.
+
+Ninguna operación de este módulo modifica stock. La cuenta corriente solo se
+toca en las ventas a pagaré: suma la deuda al registrarse, la descuenta al
+cobrarse y la revierte al anularse, siempre a través de
+``clientes.services.ajustar_saldo_cuenta_corriente``.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import NoReturn, Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.modules.pedidos.models import EstadoPedido
+from app.modules.clientes import services as clientes_services
+from app.modules.pedidos.models import (
+    EstadoPedido,
+    Facturacion,
+    MetodoPago,
+    Moneda,
+    Pedido,
+)
 from app.modules.ventas import crud
 from app.modules.ventas.models import (
     PagoVenta,
@@ -21,14 +34,21 @@ from app.modules.ventas.models import (
     VentaEstado,
 )
 from app.modules.ventas.schemas import (
+    PLAZOS_DE_PAGO,
+    CondicionPago,
     PagoVentaRead,
     ResumenPorMetodo,
     VentaAnulacionCreate,
+    VentaCobranzaMensualRead,
+    VentaCobroCreate,
     VentaCreate,
     VentaDetailRead,
     VentaHistorialRead,
     VentaListRead,
+    VentaPorCobrarItemRead,
+    VentaPorCobrarRead,
     VentaRead,
+    VentaResumenMensualRead,
     VentaResumenRead,
 )
 
@@ -105,6 +125,41 @@ class ComprobanteDuplicado(Exception):
         )
 
 
+class VentaNoPendienteDeCobro(Exception):
+    """Solo se puede cobrar una venta que está pendiente de cobro."""
+
+    def __init__(self, venta_id: int, estado: object) -> None:
+        self.venta_id = venta_id
+        self.estado = estado
+        super().__init__(
+            f"La venta {venta_id} está en estado {estado}: solo se puede cobrar "
+            "una venta PENDIENTE_COBRO."
+        )
+
+
+class PagareNoPermitido(Exception):
+    """El cliente no es mayorista y por lo tanto no tiene cuenta corriente."""
+
+    def __init__(self, cliente_id: int) -> None:
+        self.cliente_id = cliente_id
+        super().__init__(
+            f"El cliente {cliente_id} no tiene cuenta corriente: solo los "
+            "clientes mayoristas (B2B) pueden comprar a pagaré."
+        )
+
+
+class PlazoInvalido(Exception):
+    """El plazo del pagaré no es uno de los admitidos."""
+
+    def __init__(self, plazo_dias: Optional[int]) -> None:
+        self.plazo_dias = plazo_dias
+        admitidos = ", ".join(str(plazo) for plazo in PLAZOS_DE_PAGO)
+        super().__init__(
+            f"El plazo del pagaré debe ser uno de estos días: {admitidos} "
+            f"(se recibió {plazo_dias})."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -160,7 +215,199 @@ def _a_venta_read(venta: VentaComercial) -> VentaRead:
         total=_a_decimal(venta.total),
         creada_en=venta.creada_en,
         anulada_en=venta.anulada_en,
+        fecha_vencimiento=venta.fecha_vencimiento,
+        cobrada_en=venta.cobrada_en,
     )
+
+
+def _generar_comprobante(venta: VentaComercial) -> str:
+    """Comprobante legible y único: ``V-AAAAMM-######``."""
+    return f"V-{venta.fecha:%Y%m}-{venta.id:06d}"
+
+
+def _persistir_venta(
+    db: Session,
+    *,
+    pedido_id: int,
+    total: Decimal,
+    facturacion: Facturacion,
+    estado: VentaEstado,
+    pagos: list[tuple[MetodoPago, Decimal, Moneda, Optional[str]]],
+    cuenta_id: Optional[int],
+    fecha: Optional[datetime] = None,
+    fecha_vencimiento: Optional[datetime] = None,
+    cobrada_en: Optional[datetime] = None,
+    motivo: str = "Registro de la venta",
+) -> VentaComercial:
+    """Crea la venta con su comprobante, historial y pagos. Sin commit.
+
+    Es el camino de persistencia compartido por el alta manual (``POST
+    /ventas/``) y la venta que nace al entregar un pedido. Traduce la violación
+    del índice de venta vigente a ``VentaDuplicada``; el llamador decide si
+    revierte la transacción.
+
+    ``fecha`` permite que el vencimiento se calcule sobre la misma marca de
+    tiempo que la venta: si se dejara al valor por defecto, la diferencia de
+    microsegundos haría que ``fecha_vencimiento - fecha`` no sea el plazo exacto.
+    """
+    ahora = fecha or datetime.now()
+    numero_comprobante: Optional[str] = None
+
+    try:
+        venta = VentaComercial(
+            pedido_id=pedido_id,
+            fecha=ahora,
+            facturacion=facturacion,
+            estado=estado,
+            total=total,
+            cuenta_id=cuenta_id,
+            creada_en=ahora,
+            fecha_vencimiento=fecha_vencimiento,
+            cobrada_en=cobrada_en,
+        )
+        crud.crear_venta(db, venta)
+        numero_comprobante = _generar_comprobante(venta)
+        venta.numero_comprobante = numero_comprobante
+        crud.actualizar_venta(db, venta)
+
+        crud.crear_historial(
+            db,
+            VentaComercialHistorial(
+                venta_id=venta.id,
+                estado_anterior=None,
+                estado_nuevo=estado,
+                motivo=motivo,
+                cuenta_id=cuenta_id,
+                timestamp=ahora,
+            ),
+        )
+
+        for metodo, monto, moneda, aclaracion in pagos:
+            crud.crear_pago(
+                db,
+                PagoVenta(
+                    venta_id=venta.id,
+                    metodo_de_pago=metodo,
+                    monto=monto,
+                    moneda=moneda,
+                    aclaracion=aclaracion,
+                    creado_en=ahora,
+                ),
+            )
+    except IntegrityError as exc:
+        _traducir_integrity_error(exc, pedido_id, numero_comprobante)
+
+    return venta
+
+
+def _validar_plazo(plazo_dias: Optional[int]) -> int:
+    """Devuelve el plazo si es uno de los admitidos; si no, ``PlazoInvalido``."""
+    if plazo_dias not in PLAZOS_DE_PAGO:
+        raise PlazoInvalido(plazo_dias)
+    return plazo_dias
+
+
+def _sumar_deuda_de_pagare(
+    db: Session, pedido: Pedido, total: Decimal
+) -> None:
+    """Valida que el cliente sea mayorista y suma la deuda a su cuenta corriente.
+
+    La cuenta corriente es un atributo comercial del cliente B2B, así que la
+    validación se hace acá, en el alta de la venta, y no en el ajuste de saldo:
+    las reversiones posteriores tienen que funcionar aunque el cliente cambie
+    de tipo.
+    """
+    cliente = clientes_services.obtener_cliente(db, pedido.cliente_persona_id)
+    if cliente.tipo != "B2B":
+        raise PagareNoPermitido(pedido.cliente_persona_id)
+
+    clientes_services.ajustar_saldo_cuenta_corriente(
+        db, pedido.cliente_persona_id, total
+    )
+
+
+def tiene_venta_vigente(db: Session, pedido_id: int) -> bool:
+    """Indica si el pedido tiene una venta ``CONFIRMADA`` o ``PENDIENTE_COBRO``.
+
+    Lo consulta ``pedidos`` para impedir que se revierta una entrega ya vendida.
+    """
+    return crud.obtener_vigente_por_pedido(db, pedido_id) is not None
+
+
+def _facturacion_por_defecto(db: Session, pedido: Pedido) -> Facturacion:
+    """Factura A para mayoristas y consumidor final para el resto.
+
+    El panel no elige la facturación al confirmar la entrega, así que se deduce
+    del tipo de cliente con el mismo criterio que el resto del sistema.
+    """
+    cliente = clientes_services.obtener_cliente(db, pedido.cliente_persona_id)
+    return (
+        Facturacion.FACTURA_A
+        if cliente.tipo == "B2B"
+        else Facturacion.CONSUMIDOR_FINAL
+    )
+
+
+def registrar_venta_de_entrega(
+    db: Session,
+    pedido: Pedido,
+    condicion_pago: CondicionPago,
+    metodo_de_pago: Optional[MetodoPago] = None,
+    plazo_dias: Optional[int] = None,
+    cuenta_id: Optional[int] = None,
+) -> VentaComercial:
+    """Crea la venta que nace al confirmar la entrega de un pedido. Sin commit.
+
+    Participa de la transacción de ``PedidoService.cambiar_estado_pedido``, que
+    es la que valida la transición, aplica el estado ``ENTREGADO`` y cierra el
+    commit. Por eso acá no se exige que el pedido ya esté entregado ni se
+    revierte nada: si algo falla, el llamador hace el ``rollback`` completo.
+
+    Al contado la venta nace ``CONFIRMADA`` con la fecha de cobro y el método
+    informado. A pagaré nace ``PENDIENTE_COBRO``, con el vencimiento calculado y
+    un pago ``CREDITO`` que representa la deuda, y suma esa deuda a la cuenta
+    corriente del cliente mayorista.
+    """
+    if crud.obtener_vigente_por_pedido(db, pedido.id) is not None:
+        raise VentaDuplicada(pedido.id)
+
+    total = _a_decimal(pedido.total)
+    ahora = datetime.now()
+
+    if condicion_pago is CondicionPago.PAGARE:
+        plazo = _validar_plazo(plazo_dias)
+        estado = VentaEstado.PENDIENTE_COBRO
+        fecha_vencimiento = ahora + timedelta(days=plazo)
+        cobrada_en = None
+        pagos = [(MetodoPago.CREDITO, total, Moneda.ARS, None)]
+        motivo = "Venta a pagaré generada al confirmar la entrega"
+        _sumar_deuda_de_pagare(db, pedido, total)
+    else:
+        if metodo_de_pago is None:
+            raise ValueError(
+                "Una venta al contado necesita el método de pago con el que se "
+                "cobró."
+            )
+        estado = VentaEstado.CONFIRMADA
+        fecha_vencimiento = None
+        cobrada_en = ahora
+        pagos = [(metodo_de_pago, total, Moneda.ARS, None)]
+        motivo = "Venta al contado generada al confirmar la entrega"
+
+    return _persistir_venta(
+        db,
+        pedido_id=pedido.id,
+        total=total,
+        facturacion=_facturacion_por_defecto(db, pedido),
+        estado=estado,
+        pagos=pagos,
+        cuenta_id=cuenta_id,
+        fecha=ahora,
+        fecha_vencimiento=fecha_vencimiento,
+        cobrada_en=cobrada_en,
+        motivo=motivo,
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -197,56 +444,101 @@ class VentaService:
             raise PagosNoCuadran(total, pagado)
 
         ahora = datetime.now()
-        numero_comprobante: Optional[str] = None
+        es_pagare = datos.condicion_pago is CondicionPago.PAGARE
+        if es_pagare:
+            plazo = _validar_plazo(datos.plazo_dias)
+            estado = VentaEstado.PENDIENTE_COBRO
+            fecha_vencimiento: Optional[datetime] = ahora + timedelta(days=plazo)
+            cobrada_en: Optional[datetime] = None
+            _sumar_deuda_de_pagare(self.db, pedido, total)
+        else:
+            estado = VentaEstado.CONFIRMADA
+            fecha_vencimiento = None
+            cobrada_en = ahora
+
+        pagos = [
+            (pago.metodo_de_pago, pago.monto, pago.moneda, pago.aclaracion)
+            for pago in datos.pagos
+        ]
+
         try:
-            venta = VentaComercial(
-                pedido_id=pedido.id,
-                fecha=ahora,
-                facturacion=datos.facturacion,
-                estado=VentaEstado.CONFIRMADA,
-                total=total,
-                cuenta_id=cuenta_id,
-                creada_en=ahora,
-            )
-            crud.crear_venta(self.db, venta)
-            numero_comprobante = self._generar_comprobante(venta)
-            venta.numero_comprobante = numero_comprobante
-            crud.actualizar_venta(self.db, venta)
-
-            crud.crear_historial(
+            venta = _persistir_venta(
                 self.db,
-                VentaComercialHistorial(
-                    venta_id=venta.id,
-                    estado_anterior=None,
-                    estado_nuevo=VentaEstado.CONFIRMADA,
-                    motivo="Registro de la venta",
-                    cuenta_id=cuenta_id,
-                    timestamp=ahora,
-                ),
+                pedido_id=pedido.id,
+                total=total,
+                facturacion=datos.facturacion,
+                estado=estado,
+                pagos=pagos,
+                cuenta_id=cuenta_id,
+                fecha=ahora,
+                fecha_vencimiento=fecha_vencimiento,
+                cobrada_en=cobrada_en,
             )
-
-            for pago in datos.pagos:
-                crud.crear_pago(
-                    self.db,
-                    PagoVenta(
-                        venta_id=venta.id,
-                        metodo_de_pago=pago.metodo_de_pago,
-                        monto=pago.monto,
-                        moneda=pago.moneda,
-                        aclaracion=pago.aclaracion,
-                        creado_en=ahora,
-                    ),
-                )
-
             self.db.commit()
-        except IntegrityError as exc:
-            self.db.rollback()
-            _traducir_integrity_error(exc, pedido.id, numero_comprobante)
         except Exception:
             self.db.rollback()
             raise
 
         return self.obtener_venta(venta.id)
+
+    # -- Cobro ------------------------------------------------------------
+
+    def cobrar_venta(
+        self,
+        venta_id: int,
+        datos: VentaCobroCreate,
+        cuenta_id: Optional[int] = None,
+    ) -> VentaDetailRead:
+        """Marca cobrada una venta a pagaré en una sola transacción.
+
+        Actualiza el método de los pagos que representaban la deuda en lugar de
+        agregar uno nuevo: así la suma de los pagos sigue siendo igual al total
+        y el arqueo por método refleja el dinero que realmente entró.
+        """
+        venta = crud.obtener_por_id(self.db, venta_id)
+        if venta is None:
+            raise VentaNoEncontrada(venta_id)
+        if venta.estado != VentaEstado.PENDIENTE_COBRO:
+            raise VentaNoPendienteDeCobro(venta_id, venta.estado)
+
+        pedido = crud.obtener_pedido(self.db, venta.pedido_id)
+        if pedido is None:
+            raise PedidoNoEncontrado(venta.pedido_id)
+
+        ahora = datetime.now()
+        try:
+            venta.estado = VentaEstado.CONFIRMADA
+            venta.cobrada_en = ahora
+            crud.actualizar_venta(self.db, venta)
+
+            for pago in venta.pagos:
+                pago.metodo_de_pago = datos.metodo_de_pago
+                pago.aclaracion = datos.aclaracion
+
+            crud.crear_historial(
+                self.db,
+                VentaComercialHistorial(
+                    venta_id=venta.id,
+                    estado_anterior=VentaEstado.PENDIENTE_COBRO,
+                    estado_nuevo=VentaEstado.CONFIRMADA,
+                    motivo="Cobro de la venta a pagaré",
+                    cuenta_id=cuenta_id,
+                    timestamp=ahora,
+                ),
+            )
+
+            clientes_services.ajustar_saldo_cuenta_corriente(
+                self.db,
+                pedido.cliente_persona_id,
+                -_a_decimal(venta.total),
+            )
+
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        return self.obtener_venta(venta_id)
 
     # -- Anulación --------------------------------------------------------
 
@@ -256,12 +548,21 @@ class VentaService:
         datos: VentaAnulacionCreate,
         cuenta_id: Optional[int] = None,
     ) -> VentaDetailRead:
-        """Anula la venta de forma lógica, sin tocar stock ni cuenta corriente."""
+        """Anula la venta de forma lógica, sin tocar el stock.
+
+        Si la venta estaba ``PENDIENTE_COBRO`` revierte la deuda que había
+        generado en la cuenta corriente del cliente; una venta al contado no
+        toca el saldo.
+        """
         venta = crud.obtener_por_id(self.db, venta_id)
         if venta is None:
             raise VentaNoEncontrada(venta_id)
         if venta.estado == VentaEstado.ANULADA:
             raise VentaYaAnulada(venta_id)
+
+        pedido = crud.obtener_pedido(self.db, venta.pedido_id)
+        if pedido is None:
+            raise PedidoNoEncontrado(venta.pedido_id)
 
         ahora = datetime.now()
         try:
@@ -281,6 +582,14 @@ class VentaService:
                     timestamp=ahora,
                 ),
             )
+
+            if estado_anterior == VentaEstado.PENDIENTE_COBRO:
+                clientes_services.ajustar_saldo_cuenta_corriente(
+                    self.db,
+                    pedido.cliente_persona_id,
+                    -_a_decimal(venta.total),
+                )
+
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -363,11 +672,95 @@ class VentaService:
             totales_por_metodo=por_metodo,
         )
 
-    # -- Internos ---------------------------------------------------------
+    def resumen_mensual(
+        self,
+        fecha_desde: Optional[datetime] = None,
+        fecha_hasta: Optional[datetime] = None,
+    ) -> list[VentaResumenMensualRead]:
+        """Serie mensual de ventas confirmadas, de la más reciente a la más vieja."""
+        filas = crud.resumen_por_mes(self.db, fecha_desde, fecha_hasta)
 
-    def _generar_comprobante(self, venta: VentaComercial) -> str:
-        """Comprobante legible y único: ``V-AAAAMM-######``."""
-        return f"V-{venta.fecha:%Y%m}-{venta.id:06d}"
+        metodos_por_mes: dict[str, list[ResumenPorMetodo]] = {}
+        for mes, metodo, monto in crud.totales_por_mes_y_metodo(
+            self.db, fecha_desde, fecha_hasta
+        ):
+            metodos_por_mes.setdefault(mes, []).append(
+                ResumenPorMetodo(metodo_de_pago=metodo, monto=monto)
+            )
+
+        return [
+            VentaResumenMensualRead(
+                mes=mes,
+                cantidad_ventas=cantidad,
+                total_facturado=total,
+                totales_por_metodo=metodos_por_mes.get(mes, []),
+            )
+            for mes, cantidad, total in filas
+        ]
+
+    def cobranza_mensual(
+        self,
+        fecha_desde: Optional[datetime] = None,
+        fecha_hasta: Optional[datetime] = None,
+    ) -> list[VentaCobranzaMensualRead]:
+        """Serie de cobranza por mes de cobro, de la más reciente a la más vieja.
+
+        Es el complemento del resumen de facturación: mide el dinero que entró,
+        agrupado por ``cobrada_en`` y no por la fecha de la venta.
+        """
+        filas = crud.cobranza_por_mes(self.db, fecha_desde, fecha_hasta)
+
+        metodos_por_mes: dict[str, list[ResumenPorMetodo]] = {}
+        for mes, metodo, monto in crud.totales_de_cobranza_por_metodo(
+            self.db, fecha_desde, fecha_hasta
+        ):
+            metodos_por_mes.setdefault(mes, []).append(
+                ResumenPorMetodo(metodo_de_pago=metodo, monto=monto)
+            )
+
+        return [
+            VentaCobranzaMensualRead(
+                mes=mes,
+                cantidad_cobros=cantidad,
+                total_cobrado=total,
+                totales_por_metodo=metodos_por_mes.get(mes, []),
+            )
+            for mes, cantidad, total in filas
+        ]
+
+    def por_cobrar(self) -> VentaPorCobrarRead:
+        """Saldo por cobrar: pendientes ordenadas por vencimiento y su total.
+
+        La marca de vencida se calcula acá con ``datetime.now()`` para que el
+        contrato no dependa de la zona horaria con la que SQLite guardó las
+        fechas. Un pendiente sin vencimiento (dato heredado) no se marca vencido.
+        """
+        ahora = datetime.now()
+        items: list[VentaPorCobrarItemRead] = []
+
+        for venta, persona_id, nombre, apellido in crud.pendientes_de_cobro(self.db):
+            vencimiento = venta.fecha_vencimiento
+            items.append(
+                VentaPorCobrarItemRead(
+                    venta_id=venta.id,
+                    pedido_id=venta.pedido_id,
+                    numero_comprobante=venta.numero_comprobante,
+                    cliente_persona_id=persona_id,
+                    cliente_nombre=_nombre_completo(nombre, apellido),
+                    fecha=venta.fecha,
+                    fecha_vencimiento=vencimiento,
+                    total=_a_decimal(venta.total),
+                    vencida=vencimiento is not None and vencimiento < ahora,
+                )
+            )
+
+        return VentaPorCobrarRead(
+            items=items,
+            total_por_cobrar=sum((item.total for item in items), Decimal("0")),
+            cantidad_vencidas=sum(1 for item in items if item.vencida),
+        )
+
+    # -- Internos ---------------------------------------------------------
 
     def _a_detalle(self, venta: VentaComercial) -> VentaDetailRead:
         """Arma el detalle leyendo el pedido y el cliente en modo lectura."""

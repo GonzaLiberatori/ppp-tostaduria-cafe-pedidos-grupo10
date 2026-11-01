@@ -219,6 +219,31 @@ def actualizar_cliente(
     return _a_contrato(cliente, crud.kilos_comprados_de_cliente(db, cliente_id))
 
 
+def ajustar_saldo_cuenta_corriente(
+    db: Session, cliente_id: int, delta: Decimal
+) -> Decimal:
+    """Suma ``delta`` al saldo de la cuenta corriente y devuelve el nuevo saldo.
+
+    No hace ``commit``: es la contraparte de ``ventas.services`` dentro de una
+    transacción que abre el caso de uso que la invoca (por ejemplo, la entrega
+    de un pedido a pagaré). El llamador es responsable de decidir cuándo
+    confirmar o revertir.
+
+    No valida el tipo de cliente: la regla de negocio "solo un mayorista compra
+    a pagaré" se aplica al crear la venta. Acá el ajuste tiene que funcionar
+    igual al revertir una deuda vieja, aunque el cliente haya cambiado de tipo
+    después.
+    """
+    cliente = crud.obtener_cliente(db, cliente_id)
+    if cliente is None:
+        raise ClienteNoEncontrado(cliente_id)
+
+    saldo_actual = cliente.saldo_cuenta_corriente or Decimal("0")
+    cliente.saldo_cuenta_corriente = saldo_actual + delta
+    db.flush()
+    return cliente.saldo_cuenta_corriente
+
+
 def eliminar_cliente(db: Session, cliente_id: int) -> None:
     """Borra el cliente y su persona si no tiene pedidos asociados."""
     cliente = crud.obtener_cliente(db, cliente_id)

@@ -1,17 +1,43 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, NoReturn, Optional
 from datetime import datetime
 from decimal import Decimal
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.modules.auth.schemas import TokenData
+from app.modules.ventas import services as ventas_services
 
 from app.modules.pedidos import schemas, services
 
 
 router = APIRouter(prefix="/pedidos", tags=["Pedidos"])
+
+
+def _lanzar_http(exc: Exception) -> NoReturn:
+    """Traduce los errores de la entrega a códigos HTTP del panel.
+
+    409 para conflictos con el estado o las ventas del pedido, 422 para un
+    plazo de pagaré inválido y 400 para el resto de las validaciones heredadas.
+    """
+    if isinstance(exc, services.PedidoNoEncontrado):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(
+        exc,
+        (
+            services.PedidoConVentaVigente,
+            services.TransicionInvalida,
+            ventas_services.VentaDuplicada,
+            ventas_services.PagareNoPermitido,
+        ),
+    ):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, ventas_services.PlazoInvalido):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise exc
 
 
 # Dependency para servicios
@@ -140,13 +166,16 @@ def actualizar_pedido_panel(
     current_user: TokenData = Depends(get_current_user_required),
     service: services.PedidoPanelService = Depends(get_panel_service),
 ):
-    """Actualiza un pedido desde el panel."""
+    """Actualiza un pedido desde el panel.
+
+    Si el cambio de estado es la entrega, la condición de pago viaja en el mismo
+    cuerpo y la cuenta autenticada queda auditada en la venta y su historial.
+    """
     try:
-        return service.actualizar(pedido_id, datos)
-    except services.PedidoNoEncontrado as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        cuenta_id = service.resolver_cuenta_actual(current_user.email)
+        return service.actualizar(pedido_id, datos, cuenta_id=cuenta_id)
+    except Exception as exc:
+        _lanzar_http(exc)
 
 
 @router.delete("/panel/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -197,8 +226,8 @@ def cambiar_estado_pedido(
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        _lanzar_http(exc)
 
 
 @router.put("/{pedido_id}", response_model=schemas.PedidoDetailRead)
@@ -220,8 +249,8 @@ def actualizar_pedido(
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        _lanzar_http(exc)
 
 
 @router.put("/{pedido_id}/con-detalles", response_model=schemas.PedidoDetailRead)
@@ -253,8 +282,8 @@ def actualizar_pedido_con_detalles(
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         return pedido
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        _lanzar_http(exc)
 
 
 @router.delete("/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)

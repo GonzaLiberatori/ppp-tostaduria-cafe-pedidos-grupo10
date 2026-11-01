@@ -31,9 +31,14 @@ from app.modules.pedidos.models import Facturacion, MetodoPago, Moneda
 
 
 class VentaEstado(str, enum.Enum):
-    """Estado de una venta. Una venta anulada no se borra."""
+    """Estado de una venta. Una venta anulada no se borra.
+
+    ``PENDIENTE_COBRO`` es la venta a pagaré: ya está facturada y genera deuda,
+    pero todavía no entró el dinero. Pasa a ``CONFIRMADA`` al cobrarse.
+    """
 
     CONFIRMADA = "CONFIRMADA"
+    PENDIENTE_COBRO = "PENDIENTE_COBRO"
     ANULADA = "ANULADA"
 
 
@@ -53,6 +58,10 @@ class VentaComercial(Base):
     cuenta_id = Column(Integer, ForeignKey("cuenta.id"), nullable=True)
     creada_en = Column(DateTime, nullable=False)
     anulada_en = Column(DateTime, nullable=True)
+    # Solo en ventas a pagaré: fecha de entrega más el plazo pactado.
+    fecha_vencimiento = Column(DateTime, nullable=True)
+    # Momento en que entró el dinero. NULL mientras la venta esté pendiente.
+    cobrada_en = Column(DateTime, nullable=True)
 
     # Una sola venta vigente por pedido. El índice es parcial para permitir
     # volver a vender un pedido cuya venta anterior fue anulada.
@@ -61,7 +70,7 @@ class VentaComercial(Base):
             "ux_venta_comercial_pedido_vigente",
             "pedido_id",
             unique=True,
-            sqlite_where=text("estado = 'CONFIRMADA'"),
+            sqlite_where=text("estado IN ('CONFIRMADA', 'PENDIENTE_COBRO')"),
         ),
     )
 

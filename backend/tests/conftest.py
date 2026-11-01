@@ -458,19 +458,23 @@ def sample_pedido_b2b(db_session, sample_cliente_b2b, sample_empleado, sample_ti
 
 @pytest.fixture(scope="function")
 def sample_pedido_b2b_entregado(db_session, sample_pedido_b2b):
-    """Pedido B2B en estado ENTREGADO."""
-    from app.modules.pedidos import services
-    service = services.PedidoService(db_session)
-    service.cambiar_estado_pedido(sample_pedido_b2b.id, "LISTO")
-    service.cambiar_estado_pedido(sample_pedido_b2b.id, "ENTREGADO")
+    """Pedido B2B entregado antes de 005, sin venta registrada.
+
+    Desde 005 la entrega crea la venta, así que un pedido ``ENTREGADO`` sin
+    venta solo existe como dato heredado. Se fuerza el estado para poder probar
+    el alta manual de la venta (``POST /ventas/``) sobre esos pedidos.
+    """
+    sample_pedido_b2b.estado = "ENTREGADO"
+    db_session.commit()
     db_session.refresh(sample_pedido_b2b)
     return sample_pedido_b2b
 
 
 @pytest.fixture(scope="function")
 def sample_pedido_b2b_entregado_revierte(db_session, sample_cliente_b2b, sample_empleado, sample_tipo_cafe, sample_molienda, sample_perfil_tostado, sample_lote):
-    """Pedido B2B entregado para test de reversión."""
+    """Pedido B2B entregado a pagaré, con deuda y venta vigente."""
     from app.modules.pedidos import schemas, services
+    from app.modules.ventas.schemas import CondicionPago
     
     service = services.PedidoService(db_session)
     
@@ -493,10 +497,15 @@ def sample_pedido_b2b_entregado_revierte(db_session, sample_cliente_b2b, sample_
     pedido = services.PedidoService(db_session).crear_pedido_completo(
         pedido_data, sample_empleado.persona_id)
     
-    # Avanzar a ENTREGADO
+    # Avanzar a ENTREGADO vendiendo a pagaré a 30 días
     service = services.PedidoService(db_session)
     service.cambiar_estado_pedido(pedido.id, "LISTO")
-    service.cambiar_estado_pedido(pedido.id, "ENTREGADO")
+    service.cambiar_estado_pedido(
+        pedido.id,
+        "ENTREGADO",
+        condicion_pago=CondicionPago.PAGARE,
+        plazo_dias=30,
+    )
     db_session.refresh(pedido)
     return pedido
 

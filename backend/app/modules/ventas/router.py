@@ -73,6 +73,10 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
+    if isinstance(exc, services.PlazoInvalido):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     if isinstance(
         exc,
         (
@@ -81,6 +85,8 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
             services.PagosNoCuadran,
             services.VentaYaAnulada,
             services.ComprobanteDuplicado,
+            services.VentaNoPendienteDeCobro,
+            services.PagareNoPermitido,
         ),
     ):
         raise HTTPException(
@@ -159,6 +165,46 @@ def resumen_de_ventas(
 
 
 @router.get(
+    "/resumen-mensual",
+    response_model=list[schemas.VentaResumenMensualRead],
+)
+def resumen_mensual_de_ventas(
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+    cuenta: Cuenta = Depends(get_cuenta_actual),
+    service: services.VentaService = Depends(get_venta_service),
+) -> list[schemas.VentaResumenMensualRead]:
+    """Serie mensual de ventas confirmadas que alimenta la contabilidad."""
+    _exigir_rol(cuenta, ROLES_CONSULTA)
+    return service.resumen_mensual(fecha_desde, fecha_hasta)
+
+
+@router.get(
+    "/cobranza-mensual",
+    response_model=list[schemas.VentaCobranzaMensualRead],
+)
+def cobranza_mensual_de_ventas(
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+    cuenta: Cuenta = Depends(get_cuenta_actual),
+    service: services.VentaService = Depends(get_venta_service),
+) -> list[schemas.VentaCobranzaMensualRead]:
+    """Cobranza por mes de cobro, con sus totales por método."""
+    _exigir_rol(cuenta, ROLES_CONSULTA)
+    return service.cobranza_mensual(fecha_desde, fecha_hasta)
+
+
+@router.get("/por-cobrar", response_model=schemas.VentaPorCobrarRead)
+def por_cobrar_de_ventas(
+    cuenta: Cuenta = Depends(get_cuenta_actual),
+    service: services.VentaService = Depends(get_venta_service),
+) -> schemas.VentaPorCobrarRead:
+    """Ventas pendientes de cobro con su vencimiento y el total por cobrar."""
+    _exigir_rol(cuenta, ROLES_CONSULTA)
+    return service.por_cobrar()
+
+
+@router.get(
     "/comprobante/{numero_comprobante}",
     response_model=schemas.VentaDetailRead,
 )
@@ -185,6 +231,26 @@ def obtener_venta(
     _exigir_rol(cuenta, ROLES_CONSULTA)
     try:
         return service.obtener_venta(venta_id)
+    except Exception as exc:
+        _a_codigo_http(exc)
+
+
+# ---------------------------------------------------------------------------
+# Cobro
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{venta_id}/cobrar", response_model=schemas.VentaDetailRead)
+def cobrar_venta(
+    venta_id: int,
+    datos: schemas.VentaCobroCreate,
+    cuenta: Cuenta = Depends(get_cuenta_actual),
+    service: services.VentaService = Depends(get_venta_service),
+) -> schemas.VentaDetailRead:
+    """Marca cobrada una venta pendiente con el método real con el que se cobró."""
+    _exigir_rol(cuenta, ROLES_REGISTRO)
+    try:
+        return service.cobrar_venta(venta_id, datos, cuenta_id=cuenta.id)
     except Exception as exc:
         _a_codigo_http(exc)
 

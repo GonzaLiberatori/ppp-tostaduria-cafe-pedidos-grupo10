@@ -12,7 +12,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.modules.pedidos import services as pedidos_services
 from app.modules.pedidos.models import Facturacion, MetodoPago, Moneda
 from app.modules.ventas import schemas as ventas_schemas
 from app.modules.ventas import services as ventas_services
@@ -43,19 +42,20 @@ def db_session():
 
 @pytest.fixture
 def pedido_entregado_b2b(sample_pedido_b2b_entregado):
-    """Pedido de cliente Mayorista ya ENTREGADO.
+    """Pedido de cliente Mayorista ya ENTREGADO, sin venta registrada.
 
-    La deuda de la cuenta corriente ya la imputó el módulo de pedidos.
+    Es el dato heredado que sigue entrando por el alta manual ``POST /ventas/``:
+    desde 005 la entrega normal ya crea la venta, así que este pedido se fuerza
+    a ``ENTREGADO`` sin pasar por el caso de uso de entrega.
     """
     return sample_pedido_b2b_entregado
 
 
 @pytest.fixture
 def pedido_entregado_consumidor(db_session, sample_pedido_consumidor_final):
-    """Pedido de Consumidor Final llevado a ENTREGADO."""
-    service = pedidos_services.PedidoService(db_session)
-    service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "LISTO")
-    service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "ENTREGADO")
+    """Pedido de Consumidor Final ya ENTREGADO, sin venta registrada."""
+    sample_pedido_consumidor_final.estado = "ENTREGADO"
+    db_session.commit()
     db_session.refresh(sample_pedido_consumidor_final)
     return sample_pedido_consumidor_final
 

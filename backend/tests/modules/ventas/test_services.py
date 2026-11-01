@@ -6,6 +6,7 @@ Los casos críticos de idempotencia y transacción se prueban contra
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
@@ -52,6 +53,61 @@ def _kilos_por_lote(db) -> dict[int, Decimal]:
         lote.id: Decimal(str(lote.kg_disponibles))
         for lote in db.query(Lote).order_by(Lote.id).all()
     }
+
+
+def _fijar_fecha(db, venta, fecha: datetime) -> None:
+    """Reubica la venta en el mes calendario indicado."""
+    modelo = crud.obtener_por_id(db, venta.id)
+    modelo.fecha = fecha
+    db.commit()
+    db.refresh(modelo)
+
+
+def _fijar_vencimiento(db, venta, fecha: datetime) -> None:
+    """Fija el vencimiento del pagaré para probar la marca de vencida."""
+    modelo = crud.obtener_por_id(db, venta.id)
+    modelo.fecha_vencimiento = fecha
+    db.commit()
+    db.refresh(modelo)
+
+
+def _datos_pagare(pedido, plazo: int = 30) -> schemas.VentaCreate:
+    """Alta de venta a pagaré con el pago a crédito que representa la deuda."""
+    return schemas.VentaCreate(
+        pedido_id=pedido.id,
+        facturacion=Facturacion.FACTURA_A,
+        condicion_pago=schemas.CondicionPago.PAGARE,
+        plazo_dias=plazo,
+        pagos=[
+            schemas.PagoCreate(
+                metodo_de_pago=MetodoPago.CREDITO,
+                monto=Decimal(str(pedido.total)),
+                moneda=Moneda.ARS,
+            )
+        ],
+    )
+
+
+@pytest.fixture
+def dos_ventas(db_session, pedido_entregado_b2b, pedido_entregado_consumidor):
+    """Una venta de septiembre a crédito y otra de octubre en efectivo."""
+    service = services.VentaService(db_session)
+    primera = service.registrar_venta(
+        _datos_venta(
+            pedido_entregado_b2b,
+            pagos=[
+                schemas.PagoCreate(
+                    metodo_de_pago=MetodoPago.CREDITO,
+                    monto=Decimal(str(pedido_entregado_b2b.total)),
+                    moneda=Moneda.ARS,
+                )
+            ],
+        )
+    )
+    segunda = service.registrar_venta(_datos_venta(pedido_entregado_consumidor))
+    _fijar_fecha(db_session, primera, datetime(2026, 9, 15, 10, 30))
+    _fijar_fecha(db_session, segunda, datetime(2026, 10, 20, 12, 0))
+    return primera, segunda
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +272,205 @@ class TestRegistrarVenta:
 
 
 # ---------------------------------------------------------------------------
+# Alta por entrega (participa de la transacción de pedidos)
+# ---------------------------------------------------------------------------
+
+
+class TestRegistrarVentaDeEntrega:
+    """Venta que nace al confirmar la entrega de un pedido."""
+
+    def test_contado_crea_venta_confirmada_sin_deuda(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        saldo_inicial = _saldo_cliente(db_session, pedido_entregado_b2b)
+
+        venta = services.registrar_venta_de_entrega(
+            db_session,
+            pedido_entregado_b2b,
+            schemas.CondicionPago.CONTADO,
+            metodo_de_pago=MetodoPago.EFECTIVO,
+            cuenta_id=7,
+        )
+
+        assert venta.estado == VentaEstado.CONFIRMADA
+        assert venta.cobrada_en is not None
+        assert venta.fecha_vencimiento is None
+        assert venta.cuenta_id == 7
+        assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_inicial
+        assert len(venta.pagos) == 1
+        assert venta.pagos[0].metodo_de_pago == MetodoPago.EFECTIVO
+        assert venta.pagos[0].monto == Decimal(str(pedido_entregado_b2b.total))
+
+    def test_pagare_suma_deuda_y_calcula_vencimiento(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        saldo_inicial = _saldo_cliente(db_session, pedido_entregado_b2b)
+        total = Decimal(str(pedido_entregado_b2b.total))
+
+        venta = services.registrar_venta_de_entrega(
+            db_session,
+            pedido_entregado_b2b,
+            schemas.CondicionPago.PAGARE,
+            plazo_dias=30,
+        )
+
+        assert venta.estado == VentaEstado.PENDIENTE_COBRO
+        assert venta.cobrada_en is None
+        assert venta.fecha_vencimiento is not None
+        assert venta.fecha_vencimiento - venta.fecha == timedelta(days=30)
+        assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_inicial + total
+        assert venta.pagos[0].metodo_de_pago == MetodoPago.CREDITO
+        assert venta.pagos[0].monto == total
+        assert venta.historial[0].estado_nuevo == VentaEstado.PENDIENTE_COBRO
+
+    def test_pagare_a_cliente_no_mayorista_es_rechazado(
+        self, db_session, pedido_entregado_consumidor
+    ) -> None:
+        saldo_inicial = _saldo_cliente(db_session, pedido_entregado_consumidor)
+
+        with pytest.raises(services.PagareNoPermitido):
+            services.registrar_venta_de_entrega(
+                db_session,
+                pedido_entregado_consumidor,
+                schemas.CondicionPago.PAGARE,
+                plazo_dias=30,
+            )
+
+        assert crud.obtener_vigente_por_pedido(
+            db_session, pedido_entregado_consumidor.id
+        ) is None
+        assert (
+            _saldo_cliente(db_session, pedido_entregado_consumidor)
+            == saldo_inicial
+        )
+
+    @pytest.mark.parametrize("plazo", [None, 0, 15, 45, 120])
+    def test_plazo_invalido_es_rechazado(
+        self, db_session, pedido_entregado_b2b, plazo
+    ) -> None:
+        with pytest.raises(services.PlazoInvalido):
+            services.registrar_venta_de_entrega(
+                db_session,
+                pedido_entregado_b2b,
+                schemas.CondicionPago.PAGARE,
+                plazo_dias=plazo,
+            )
+
+        assert crud.obtener_vigente_por_pedido(
+            db_session, pedido_entregado_b2b.id
+        ) is None
+
+    def test_no_commitea(self, db_session, pedido_entregado_b2b) -> None:
+        with patch.object(
+            db_session,
+            "commit",
+            side_effect=AssertionError(
+                "registrar_venta_de_entrega no debe commitear"
+            ),
+        ):
+            services.registrar_venta_de_entrega(
+                db_session,
+                pedido_entregado_b2b,
+                schemas.CondicionPago.CONTADO,
+                metodo_de_pago=MetodoPago.EFECTIVO,
+            )
+
+    def test_venta_vigente_bloquea_una_segunda_entrega(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        services.registrar_venta_de_entrega(
+            db_session,
+            pedido_entregado_b2b,
+            schemas.CondicionPago.PAGARE,
+            plazo_dias=30,
+        )
+
+        with pytest.raises(services.VentaDuplicada):
+            services.registrar_venta_de_entrega(
+                db_session,
+                pedido_entregado_b2b,
+                schemas.CondicionPago.CONTADO,
+                metodo_de_pago=MetodoPago.EFECTIVO,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Cobro
+# ---------------------------------------------------------------------------
+
+
+class TestCobrarVenta:
+    """Cobro de una venta pendiente."""
+
+    def _venta_pendiente(self, db_session, pedido):
+        """Crea una venta a pagaré a 30 días y confirma la deuda."""
+        venta = services.registrar_venta_de_entrega(
+            db_session,
+            pedido,
+            schemas.CondicionPago.PAGARE,
+            plazo_dias=30,
+        )
+        db_session.commit()
+        return venta
+
+    def test_cobro_exitoso(self, db_session, pedido_entregado_b2b) -> None:
+        saldo_inicial = _saldo_cliente(db_session, pedido_entregado_b2b)
+        total = Decimal(str(pedido_entregado_b2b.total))
+        venta = self._venta_pendiente(db_session, pedido_entregado_b2b)
+
+        cobrada = services.VentaService(db_session).cobrar_venta(
+            venta.id,
+            schemas.VentaCobroCreate(
+                metodo_de_pago=MetodoPago.TRANSFERENCIA,
+                aclaracion="Transferencia Banco Nación",
+            ),
+            cuenta_id=3,
+        )
+
+        assert cobrada.estado == VentaEstado.CONFIRMADA
+        assert cobrada.cobrada_en is not None
+        assert cobrada.numero_comprobante == venta.numero_comprobante
+        assert cobrada.pagos[0].metodo_de_pago == MetodoPago.TRANSFERENCIA
+        assert cobrada.pagos[0].aclaracion == "Transferencia Banco Nación"
+        assert sum(pago.monto for pago in cobrada.pagos) == total
+        assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_inicial
+        assert len(cobrada.historial) == 2
+        assert cobrada.historial[-1].estado_anterior == VentaEstado.PENDIENTE_COBRO
+        assert cobrada.historial[-1].estado_nuevo == VentaEstado.CONFIRMADA
+        assert cobrada.historial[-1].cuenta_id == 3
+
+    def test_cobro_de_una_venta_ya_confirmada(
+        self, db_session, venta_confirmada
+    ) -> None:
+        with pytest.raises(services.VentaNoPendienteDeCobro):
+            services.VentaService(db_session).cobrar_venta(
+                venta_confirmada.id,
+                schemas.VentaCobroCreate(metodo_de_pago=MetodoPago.EFECTIVO),
+            )
+
+    def test_cobro_de_una_venta_anulada(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        venta = self._venta_pendiente(db_session, pedido_entregado_b2b)
+        services.VentaService(db_session).anular_venta(
+            venta.id, schemas.VentaAnulacionCreate(motivo="Error de carga")
+        )
+
+        with pytest.raises(services.VentaNoPendienteDeCobro):
+            services.VentaService(db_session).cobrar_venta(
+                venta.id,
+                schemas.VentaCobroCreate(metodo_de_pago=MetodoPago.EFECTIVO),
+            )
+
+    def test_cobro_de_una_venta_inexistente(self, db_session) -> None:
+        with pytest.raises(services.VentaNoEncontrada):
+            services.VentaService(db_session).cobrar_venta(
+                999999,
+                schemas.VentaCobroCreate(metodo_de_pago=MetodoPago.EFECTIVO),
+            )
+
+
+# ---------------------------------------------------------------------------
 # Anulación
 # ---------------------------------------------------------------------------
 
@@ -296,6 +551,39 @@ class TestAnularVenta:
         assert nueva.id != venta_confirmada.id
         assert nueva.estado == VentaEstado.CONFIRMADA
         assert nueva.numero_comprobante != venta_confirmada.numero_comprobante
+
+    def test_anular_pagare_revierte_la_deuda(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        saldo_inicial = _saldo_cliente(db_session, pedido_entregado_b2b)
+        total = Decimal(str(pedido_entregado_b2b.total))
+        venta = services.registrar_venta_de_entrega(
+            db_session,
+            pedido_entregado_b2b,
+            schemas.CondicionPago.PAGARE,
+            plazo_dias=60,
+        )
+        db_session.commit()
+        assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_inicial + total
+
+        anulada = services.VentaService(db_session).anular_venta(
+            venta.id, schemas.VentaAnulacionCreate(motivo="Cliente desistió")
+        )
+
+        assert anulada.estado == VentaEstado.ANULADA
+        assert len(anulada.pagos) == 1
+        assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_inicial
+
+    def test_anular_venta_al_contado_no_toca_el_saldo(
+        self, db_session, venta_confirmada, pedido_entregado_b2b
+    ) -> None:
+        saldo_inicial = _saldo_cliente(db_session, pedido_entregado_b2b)
+
+        services.VentaService(db_session).anular_venta(
+            venta_confirmada.id, schemas.VentaAnulacionCreate(motivo="Error")
+        )
+
+        assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_inicial
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +692,137 @@ class TestConsultas:
         assert resumen.cantidad_ventas == 0
         assert resumen.total_facturado == Decimal("0")
         assert resumen.totales_por_metodo == []
+
+    def test_resumen_mensual(self, db_session, dos_ventas) -> None:
+        serie = services.VentaService(db_session).resumen_mensual()
+
+        assert [fila.mes for fila in serie] == ["2026-10", "2026-09"]
+        assert serie[0].cantidad_ventas == 1
+        assert serie[0].total_facturado == Decimal(str(dos_ventas[1].total))
+        assert serie[1].cantidad_ventas == 1
+        assert serie[1].total_facturado == Decimal(str(dos_ventas[0].total))
+
+    def test_resumen_mensual_incluye_metodos_del_mes(
+        self, db_session, dos_ventas
+    ) -> None:
+        serie = services.VentaService(db_session).resumen_mensual()
+        por_mes = {fila.mes: fila for fila in serie}
+
+        assert [pago.metodo_de_pago for pago in por_mes["2026-09"].totales_por_metodo] == [
+            MetodoPago.CREDITO
+        ]
+        assert [pago.metodo_de_pago for pago in por_mes["2026-10"].totales_por_metodo] == [
+            MetodoPago.EFECTIVO
+        ]
+
+    def test_resumen_mensual_excluye_anuladas(self, db_session, dos_ventas) -> None:
+        services.VentaService(db_session).anular_venta(
+            dos_ventas[0].id, schemas.VentaAnulacionCreate(motivo="Error de cobro")
+        )
+
+        serie = services.VentaService(db_session).resumen_mensual()
+
+        assert [fila.mes for fila in serie] == ["2026-10"]
+        assert serie[0].total_facturado == Decimal(str(dos_ventas[1].total))
+
+    def test_resumen_mensual_filtra_por_rango(self, db_session, dos_ventas) -> None:
+        serie = services.VentaService(db_session).resumen_mensual(
+            fecha_desde=datetime(2026, 10, 1)
+        )
+
+        assert [fila.mes for fila in serie] == ["2026-10"]
+
+    def test_resumen_mensual_sin_ventas(self, db_session) -> None:
+        serie = services.VentaService(db_session).resumen_mensual()
+
+        assert serie == []
+
+
+class TestCobranzaYPorCobrar:
+    """Serie de cobranza y saldo por cobrar."""
+
+    def test_cobranza_mensual_usa_el_mes_del_cobro(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        service = services.VentaService(db_session)
+        venta = service.registrar_venta(_datos_pagare(pedido_entregado_b2b))
+        _fijar_fecha(db_session, venta, datetime(2026, 8, 20, 10, 0))
+
+        service.cobrar_venta(
+            venta.id,
+            schemas.VentaCobroCreate(metodo_de_pago=MetodoPago.TRANSFERENCIA),
+        )
+
+        serie = service.cobranza_mensual()
+        mes_actual = datetime.now().strftime("%Y-%m")
+
+        assert [fila.mes for fila in serie] == [mes_actual]
+        assert serie[0].cantidad_cobros == 1
+        assert serie[0].total_cobrado == Decimal(str(venta.total))
+        assert serie[0].totales_por_metodo[0].metodo_de_pago == (
+            MetodoPago.TRANSFERENCIA
+        )
+
+    def test_cobranza_mensual_sin_cobros(self, db_session) -> None:
+        assert services.VentaService(db_session).cobranza_mensual() == []
+
+    def test_por_cobrar_marca_vencidas_y_suma_el_total(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        service = services.VentaService(db_session)
+        venta = service.registrar_venta(_datos_pagare(pedido_entregado_b2b))
+        _fijar_vencimiento(
+            db_session, venta, datetime.now() - timedelta(days=5)
+        )
+
+        por_cobrar = service.por_cobrar()
+
+        assert len(por_cobrar.items) == 1
+        item = por_cobrar.items[0]
+        assert item.venta_id == venta.id
+        assert item.vencida is True
+        assert item.fecha_vencimiento is not None
+        assert por_cobrar.total_por_cobrar == item.total
+        assert por_cobrar.cantidad_vencidas == 1
+
+    def test_por_cobrar_no_marca_vencida_una_pendiente_futura(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        service = services.VentaService(db_session)
+        venta = service.registrar_venta(
+            _datos_pagare(pedido_entregado_b2b, plazo=90)
+        )
+        _fijar_vencimiento(
+            db_session, venta, datetime.now() + timedelta(days=10)
+        )
+
+        por_cobrar = service.por_cobrar()
+
+        assert por_cobrar.items[0].vencida is False
+        assert por_cobrar.cantidad_vencidas == 0
+
+    def test_por_cobrar_excluye_cobradas(
+        self, db_session, venta_confirmada
+    ) -> None:
+        por_cobrar = services.VentaService(db_session).por_cobrar()
+
+        assert por_cobrar.items == []
+        assert por_cobrar.total_por_cobrar == Decimal("0")
+
+    def test_por_cobrar_excluye_anuladas(
+        self, db_session, pedido_entregado_b2b
+    ) -> None:
+        service = services.VentaService(db_session)
+        anulada = service.registrar_venta(_datos_pagare(pedido_entregado_b2b))
+        service.anular_venta(
+            anulada.id, schemas.VentaAnulacionCreate(motivo="Error")
+        )
+
+        por_cobrar = service.por_cobrar()
+
+        assert por_cobrar.items == []
+        assert por_cobrar.total_por_cobrar == Decimal("0")
+        assert por_cobrar.cantidad_vencidas == 0
 
 
 # ---------------------------------------------------------------------------

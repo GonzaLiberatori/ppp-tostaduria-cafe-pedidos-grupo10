@@ -6,6 +6,12 @@ from unittest.mock import Mock, MagicMock
 from app.modules.pedidos import services, models, schemas, crud
 from app.modules.auth.models import Cuenta
 from app.modules.pedidos.models import Persona, Cliente, Empleado, TipoCliente, Lote, TipoLote, EstadoLote, TipoDeCafe, Molienda, PerfilDeTostado, OrdenTueste
+from app.modules.ventas.schemas import VentaAnulacionCreate
+
+
+def _anulacion(motivo: str = "Anulación de prueba") -> VentaAnulacionCreate:
+    """Motivo de anulación reutilizado por los tests de reversión."""
+    return VentaAnulacionCreate(motivo=motivo)
 
 
 class TestPedidoService:
@@ -164,6 +170,9 @@ class TestPedidoService:
     def test_cambiar_estado_transiciones_validas(self, db_session, sample_pedido):
         """Test cambio de estado con transiciones válidas"""
         from app.modules.pedidos import services
+        from app.modules.pedidos.models import MetodoPago
+        from app.modules.ventas.schemas import CondicionPago
+        from app.modules.ventas import crud as ventas_crud, services as ventas_services
         
         service = services.PedidoService(db_session)
         
@@ -171,17 +180,221 @@ class TestPedidoService:
         pedido = service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
         assert pedido.estado == "LISTO"
         
-        # Listo -> Entregado
-        pedido = service.cambiar_estado_pedido(pedido.id, "ENTREGADO")
+        # Listo -> Entregado (al contado: la venta nace en la entrega)
+        pedido = service.cambiar_estado_pedido(
+            pedido.id,
+            "ENTREGADO",
+            condicion_pago=CondicionPago.CONTADO,
+            metodo_de_pago=MetodoPago.EFECTIVO,
+        )
         assert pedido.estado == "ENTREGADO"
-        
-        # Entregado -> Listo (reversión)
+        venta = ventas_crud.obtener_vigente_por_pedido(db_session, pedido.id)
+        assert venta is not None
+
+        # Entregado -> Listo exige anular la venta vigente primero
+        ventas_services.VentaService(db_session).anular_venta(
+            venta.id, _anulacion()
+        )
         pedido = service.cambiar_estado_pedido(pedido.id, "LISTO")
         assert pedido.estado == "LISTO"
         
         # Listo -> Pendiente
         pedido = service.cambiar_estado_pedido(pedido.id, "PENDIENTE")
         assert pedido.estado == "PENDIENTE"
+
+    def test_entrega_sin_condicion_de_pago_falla(self, db_session, sample_pedido):
+        """Sin condición de pago no se puede entregar: la venta no puede nacer."""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
+        
+        with pytest.raises(ValueError, match="condición de pago"):
+            service.cambiar_estado_pedido(sample_pedido.id, "ENTREGADO")
+        
+        db_session.refresh(sample_pedido)
+        assert sample_pedido.estado == "LISTO"
+
+    def test_entrega_al_contado_crea_venta_sin_deuda(
+        self, db_session, sample_cliente_b2b, sample_pedido_b2b
+    ):
+        """Entregar al contado confirma la venta y no toca la cuenta corriente."""
+        from app.modules.pedidos import services
+        from app.modules.pedidos.models import MetodoPago
+        from app.modules.ventas import crud as ventas_crud
+        from app.modules.ventas.models import VentaEstado
+        from app.modules.ventas.schemas import CondicionPago
+        
+        service = services.PedidoService(db_session)
+        db_session.refresh(sample_cliente_b2b)
+        saldo_inicial = sample_cliente_b2b.saldo_cuenta_corriente
+        
+        service.cambiar_estado_pedido(sample_pedido_b2b.id, "LISTO")
+        service.cambiar_estado_pedido(
+            sample_pedido_b2b.id,
+            "ENTREGADO",
+            condicion_pago=CondicionPago.CONTADO,
+            metodo_de_pago=MetodoPago.TRANSFERENCIA,
+            cuenta_id=42,
+        )
+        
+        venta = ventas_crud.obtener_vigente_por_pedido(db_session, sample_pedido_b2b.id)
+        assert venta is not None
+        assert venta.estado == VentaEstado.CONFIRMADA
+        assert venta.cobrada_en is not None
+        assert venta.cuenta_id == 42
+        assert venta.pagos[0].metodo_de_pago == MetodoPago.TRANSFERENCIA
+        
+        db_session.refresh(sample_cliente_b2b)
+        assert sample_cliente_b2b.saldo_cuenta_corriente == saldo_inicial
+
+    def test_entrega_a_pagare_b2b_genera_deuda(
+        self, db_session, sample_cliente_b2b, sample_pedido_b2b
+    ):
+        """Entregar a pagaré deja la venta pendiente y suma la deuda al cliente."""
+        from app.modules.pedidos import services
+        from app.modules.ventas import crud as ventas_crud
+        from app.modules.ventas.models import VentaEstado
+        from app.modules.ventas.schemas import CondicionPago
+        
+        service = services.PedidoService(db_session)
+        db_session.refresh(sample_cliente_b2b)
+        saldo_inicial = sample_cliente_b2b.saldo_cuenta_corriente
+        
+        service.cambiar_estado_pedido(sample_pedido_b2b.id, "LISTO")
+        service.cambiar_estado_pedido(
+            sample_pedido_b2b.id,
+            "ENTREGADO",
+            condicion_pago=CondicionPago.PAGARE,
+            plazo_dias=60,
+        )
+        
+        venta = ventas_crud.obtener_vigente_por_pedido(db_session, sample_pedido_b2b.id)
+        assert venta.estado == VentaEstado.PENDIENTE_COBRO
+        assert venta.fecha_vencimiento is not None
+        
+        db_session.refresh(sample_cliente_b2b)
+        assert (
+            sample_cliente_b2b.saldo_cuenta_corriente
+            == saldo_inicial + sample_pedido_b2b.total
+        )
+
+    def test_entrega_a_pagare_de_consumidor_final_falla_sin_deuda(
+        self, db_session, sample_pedido_consumidor_final
+    ):
+        """Un cliente sin cuenta corriente no puede comprar a pagaré."""
+        from app.modules.pedidos import services
+        from app.modules.ventas import crud as ventas_crud
+        from app.modules.ventas import services as ventas_services
+        from app.modules.ventas.schemas import CondicionPago
+        
+        service = services.PedidoService(db_session)
+        cliente = sample_pedido_consumidor_final.cliente
+        db_session.refresh(cliente)
+        saldo_inicial = cliente.saldo_cuenta_corriente
+        
+        service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "LISTO")
+        with pytest.raises(ventas_services.PagareNoPermitido):
+            service.cambiar_estado_pedido(
+                sample_pedido_consumidor_final.id,
+                "ENTREGADO",
+                condicion_pago=CondicionPago.PAGARE,
+                plazo_dias=30,
+            )
+        
+        db_session.refresh(sample_pedido_consumidor_final)
+        db_session.refresh(cliente)
+        assert sample_pedido_consumidor_final.estado == "LISTO"
+        assert cliente.saldo_cuenta_corriente == saldo_inicial
+        assert (
+            ventas_crud.obtener_vigente_por_pedido(
+                db_session, sample_pedido_consumidor_final.id
+            )
+            is None
+        )
+
+    def test_fallo_de_la_venta_deja_el_pedido_en_listo(
+        self, db_session, sample_cliente_b2b, sample_pedido_b2b, monkeypatch
+    ):
+        """Si la venta falla, la entrega se revierte completa: estado y deuda."""
+        from app.modules.pedidos import services
+        from app.modules.ventas import services as ventas_services
+        from app.modules.ventas.schemas import CondicionPago
+        
+        service = services.PedidoService(db_session)
+        db_session.refresh(sample_cliente_b2b)
+        saldo_inicial = sample_cliente_b2b.saldo_cuenta_corriente
+        service.cambiar_estado_pedido(sample_pedido_b2b.id, "LISTO")
+        
+        def _falla(*_args, **_kwargs):
+            raise RuntimeError("fallo simulado al persistir la venta")
+        
+        monkeypatch.setattr(
+            ventas_services, "registrar_venta_de_entrega", _falla
+        )
+        
+        with pytest.raises(RuntimeError, match="fallo simulado"):
+            service.cambiar_estado_pedido(
+                sample_pedido_b2b.id,
+                "ENTREGADO",
+                condicion_pago=CondicionPago.PAGARE,
+                plazo_dias=30,
+            )
+        
+        db_session.refresh(sample_pedido_b2b)
+        db_session.refresh(sample_cliente_b2b)
+        assert sample_pedido_b2b.estado == "LISTO"
+        assert sample_cliente_b2b.saldo_cuenta_corriente == saldo_inicial
+
+    def test_reversion_entregado_a_listo_bloqueada_por_venta_vigente(
+        self, db_session, sample_pedido_b2b_entregado_revierte
+    ):
+        """Revertir una entrega ya vendida se rechaza con el error de dominio."""
+        from app.modules.pedidos import services
+        
+        service = services.PedidoService(db_session)
+        cliente = sample_pedido_b2b_entregado_revierte.cliente
+        db_session.refresh(cliente)
+        saldo_entregado = cliente.saldo_cuenta_corriente
+        
+        with pytest.raises(services.PedidoConVentaVigente):
+            service.cambiar_estado_pedido(
+                sample_pedido_b2b_entregado_revierte.id, "LISTO"
+            )
+        
+        db_session.refresh(sample_pedido_b2b_entregado_revierte)
+        db_session.refresh(cliente)
+        assert sample_pedido_b2b_entregado_revierte.estado == "ENTREGADO"
+        assert cliente.saldo_cuenta_corriente == saldo_entregado
+
+    def test_reversion_entregado_a_listo_permitida_tras_anular(
+        self, db_session, sample_pedido_b2b_entregado_revierte
+    ):
+        """Anulada la venta, la reversión se permite y no toca el saldo."""
+        from app.modules.pedidos import services
+        from app.modules.ventas import crud as ventas_crud
+        from app.modules.ventas import services as ventas_services
+        from app.modules.ventas.models import VentaEstado
+        
+        venta = ventas_crud.obtener_vigente_por_pedido(
+            db_session, sample_pedido_b2b_entregado_revierte.id
+        )
+        ventas_services.VentaService(db_session).anular_venta(
+            venta.id, _anulacion()
+        )
+        
+        cliente = sample_pedido_b2b_entregado_revierte.cliente
+        db_session.refresh(cliente)
+        saldo_tras_anular = cliente.saldo_cuenta_corriente
+        
+        pedido = services.PedidoService(db_session).cambiar_estado_pedido(
+            sample_pedido_b2b_entregado_revierte.id, "LISTO"
+        )
+        
+        assert pedido.estado == "LISTO"
+        db_session.refresh(cliente)
+        assert cliente.saldo_cuenta_corriente == saldo_tras_anular
+        assert venta.estado == VentaEstado.ANULADA
     
     def test_cambiar_estado_transicion_invalida(self, db_session, sample_pedido):
         """Test que transiciones inválidas lanzan error"""
@@ -195,8 +408,15 @@ class TestPedidoService:
         
         # Entregado -> Pendiente (inválido, debe pasar por Listo)
         # Primero ponemos en Entregado
+        from app.modules.pedidos.models import MetodoPago
+        from app.modules.ventas.schemas import CondicionPago
         service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
-        service.cambiar_estado_pedido(sample_pedido.id, "ENTREGADO")
+        service.cambiar_estado_pedido(
+            sample_pedido.id,
+            "ENTREGADO",
+            condicion_pago=CondicionPago.CONTADO,
+            metodo_de_pago=MetodoPago.EFECTIVO,
+        )
         
         with pytest.raises(ValueError, match="Transición inválida"):
             service.cambiar_estado_pedido(sample_pedido.id, "PENDIENTE")
@@ -232,67 +452,25 @@ class TestPedidoService:
         with pytest.raises(ValueError, match="Solo se pueden eliminar pedidos en estado PENDIENTE"):
             service.eliminar_pedido(sample_pedido.id)
     
-    def test_cuenta_corriente_b2b_entregado(self, db_session, sample_cliente_b2b, sample_pedido_b2b):
-        """Test que cuenta corriente se actualiza al entregar pedido B2B"""
-        from app.modules.pedidos import services
-        
-        service = services.PedidoService(db_session)
-        
-        # Verificar saldo inicial
-        cliente = db_session.query(sample_cliente_b2b.__class__).filter_by(persona_id=sample_cliente_b2b.persona_id).first()
-        saldo_inicial = cliente.saldo_cuenta_corriente
-        
-        # Cambiar a Entregado
-        service.cambiar_estado_pedido(sample_pedido_b2b.id, "LISTO")
-        service.cambiar_estado_pedido(sample_pedido_b2b.id, "ENTREGADO")
-        
-        # Verificar que se actualizó la cuenta corriente
-        db_session.refresh(sample_cliente_b2b)
-        assert sample_cliente_b2b.saldo_cuenta_corriente == saldo_inicial + sample_pedido_b2b.total
-    
-    def test_cuenta_corriente_reversion_entregado_a_listo(self, db_session, sample_pedido_b2b_entregado):
-        """Test que reversión Entregado->Listo revierte cuenta corriente"""
-        from app.modules.pedidos import services
-        
-        service = services.PedidoService(db_session)
-        
-        cliente = db_session.query(sample_pedido_b2b_entregado.cliente.__class__).filter_by(persona_id=sample_pedido_b2b_entregado.cliente_persona_id).first()
-        saldo_entregado = cliente.saldo_cuenta_corriente
-        
-        # Revertir a Listo
-        service.cambiar_estado_pedido(sample_pedido_b2b_entregado.id, "LISTO")
-        
-        # Verificar que se restó el total
-        db_session.refresh(cliente)
-        assert cliente.saldo_cuenta_corriente == saldo_entregado - sample_pedido_b2b_entregado.total
-    
-    def test_cuenta_corriente_no_afecta_consumidor_final(self, db_session, sample_pedido_consumidor_final):
-        """Test que clientes Consumidor Final no afectan cuenta corriente"""
-        from app.modules.pedidos import services
-        
-        service = services.PedidoService(db_session)
-        
-        cliente = db_session.query(sample_pedido_consumidor_final.cliente.__class__).filter_by(persona_id=sample_pedido_consumidor_final.cliente_persona_id).first()
-        assert cliente.es_b2b == False
-        
-        saldo_inicial = cliente.saldo_cuenta_corriente
-        
-        service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "LISTO")
-        service.cambiar_estado_pedido(sample_pedido_consumidor_final.id, "ENTREGADO")
-        
-        # La cuenta corriente no debe cambiar
-        db_session.refresh(cliente)
-        assert cliente.saldo_cuenta_corriente == saldo_inicial
-    
     def test_historial_estados_se_registra(self, db_session, sample_pedido):
         """Test que cada cambio de estado se registra en historial"""
         from app.modules.pedidos import services, crud
+        from app.modules.pedidos.models import MetodoPago
+        from app.modules.ventas import crud as ventas_crud, services as ventas_services
+        from app.modules.ventas.schemas import CondicionPago
         
         service = services.PedidoService(db_session)
         
         # Cambiar estado varias veces
         service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
-        service.cambiar_estado_pedido(sample_pedido.id, "ENTREGADO")
+        service.cambiar_estado_pedido(
+            sample_pedido.id,
+            "ENTREGADO",
+            condicion_pago=CondicionPago.CONTADO,
+            metodo_de_pago=MetodoPago.EFECTIVO,
+        )
+        venta = ventas_crud.obtener_vigente_por_pedido(db_session, sample_pedido.id)
+        ventas_services.VentaService(db_session).anular_venta(venta.id, _anulacion())
         service.cambiar_estado_pedido(sample_pedido.id, "LISTO")
         
         # Verificar historial
@@ -421,19 +599,33 @@ class TestPedidoService:
         
         pedido = services.PedidoService(db_session).crear_pedido_completo(pedido_data, empleado.persona_id)
         
-        # Avanzar a ENTREGADO
+        # Avanzar a ENTREGADO vendiendo a pagaré: la deuda vive en la venta
+        from app.modules.pedidos.models import MetodoPago
+        from app.modules.ventas import crud as ventas_crud, services as ventas_services
+        from app.modules.ventas.schemas import CondicionPago
+        
         service.cambiar_estado_pedido(pedido.id, "LISTO")
-        service.cambiar_estado_pedido(pedido.id, "ENTREGADO")
+        service.cambiar_estado_pedido(
+            pedido.id,
+            "ENTREGADO",
+            condicion_pago=CondicionPago.PAGARE,
+            plazo_dias=30,
+        )
         
         # Verificar cuenta corriente incrementada
         db_session.refresh(cliente)
         saldo_entregado = cliente.saldo_cuenta_corriente
+        assert saldo_entregado == pedido.total
         
-        # Revertir a LISTO
-        from app.modules.pedidos import services as svc
-        svc.PedidoService(db_session).cambiar_estado_pedido(pedido.id, "LISTO")
+        # Revertir sin anular la venta se rechaza
+        with pytest.raises(services.PedidoConVentaVigente):
+            service.cambiar_estado_pedido(pedido.id, "LISTO")
         
-        # Verificar que se revirtió
+        # Anular la venta revierte la deuda y habilita la reversión
+        venta = ventas_crud.obtener_vigente_por_pedido(db_session, pedido.id)
+        ventas_services.VentaService(db_session).anular_venta(venta.id, _anulacion())
+        service.cambiar_estado_pedido(pedido.id, "LISTO")
+        
         db_session.refresh(cliente)
         assert cliente.saldo_cuenta_corriente == 0  # Volvió a 0
 

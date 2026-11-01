@@ -1,7 +1,10 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
+
+from app.modules.pedidos.models import MetodoPago
+from app.modules.ventas.schemas import PLAZOS_DE_PAGO, CondicionPago
 
 
 class EstadoPedidoEnum(str):
@@ -412,7 +415,13 @@ class PedidoPanelCreate(BaseModel):
 
 
 class PedidoPanelUpdate(BaseModel):
-    """Edición parcial de pedido desde el panel."""
+    """Edición parcial de pedido desde el panel.
+
+    ``condicionPago``, ``metodoPago`` y ``plazoDias`` solo se usan cuando el
+    pedido pasa a ``Entregado``: la condición con la que se vende se elige en ese
+    momento y ``pedidos`` la reenvía a ``ventas`` sin persistirla. Un ``PATCH``
+    que no entrega no necesita ninguno de los tres.
+    """
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
@@ -421,6 +430,44 @@ class PedidoPanelUpdate(BaseModel):
     medioContacto: Optional[str] = None
     observaciones: Optional[str] = None
     items: Optional[List[PedidoPanelItem]] = None
+    condicionPago: Optional[CondicionPago] = None
+    metodoPago: Optional[MetodoPago] = None
+    plazoDias: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validar_condicion_de_entrega(self) -> "PedidoPanelUpdate":
+        """Exige la condición completa solo cuando el PATCH entrega el pedido.
+
+        Un cambio de cliente, ítems u observaciones sigue siendo válido sin
+        condición de pago; el 422 aparece únicamente al intentar pasar a
+        ``Entregado`` con datos incompletos. ``ventas`` vuelve a validar el
+        plazo al registrar la venta: esto es la validación de entrada, no la
+        regla de negocio.
+        """
+        if (self.estado or "").strip().lower() != "entregado":
+            return self
+
+        if self.condicionPago is None:
+            raise ValueError(
+                "Para entregar el pedido hay que indicar condicionPago: "
+                "CONTADO o PAGARE."
+            )
+
+        if self.condicionPago is CondicionPago.CONTADO:
+            if self.metodoPago is None:
+                raise ValueError("Una entrega al contado necesita metodoPago.")
+            return self
+
+        if self.plazoDias is None:
+            raise ValueError(
+                "Una entrega a pagaré necesita plazoDias (30, 60 o 90)."
+            )
+        if self.plazoDias not in PLAZOS_DE_PAGO:
+            raise ValueError(
+                "El plazo del pagaré debe ser 30, 60 o 90 días "
+                f"(se recibió {self.plazoDias})."
+            )
+        return self
 
 
 class PedidoPanelItemRead(BaseModel):

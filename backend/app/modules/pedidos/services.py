@@ -9,6 +9,8 @@ import uuid
 
 from app.modules.pedidos import models, schemas, crud
 from app.modules.auth.models import Cuenta
+from app.modules.ventas import services as ventas_services
+from app.modules.ventas.schemas import CondicionPago
 
 
 class PedidoService:
@@ -154,20 +156,6 @@ class PedidoService:
             "ENTREGADO": ["LISTO"]
         }
         return nuevo_estado in transiciones_validas.get(estado_actual, [])
-
-    def _es_cliente_b2b(self, cliente_id: int) -> bool:
-        """Verificar si el cliente es B2B (Mayorista)"""
-        cliente = crud.get_cliente(self.db, cliente_id)
-        if not cliente:
-            return False
-        return cliente.es_b2b
-
-    def _ajustar_cuenta_corriente(self, cliente_id: int, delta: Decimal):
-        """Ajustar cuenta corriente del cliente (solo B2B)"""
-        cliente = crud.get_cliente(self.db, cliente_id)
-        if cliente and cliente.es_b2b:
-            cliente.saldo_cuenta_corriente += delta
-            self.db.commit()
 
     def _registrar_historial_estado(self, pedido_id: int, estado_anterior: Optional[str], estado_nuevo: str, usuario_id: Optional[int] = None):
         """Registrar cambio de estado en el historial"""
@@ -391,29 +379,19 @@ class PedidoService:
         
         # Actualizar campos simples
         update_data = pedido_update.model_dump(exclude_unset=True)
-        nuevo_estado = update_data.get("estado", db_pedido.estado)
-        
-        # Si hay cambio de estado, validar transición
-        if "estado" in update_data and update_data["estado"] != estado_anterior:
-            if not self._validar_transicion_estado(estado_anterior, nuevo_estado):
-                raise ValueError(f"Transición inválida: {estado_anterior} -> {nuevo_estado}")
-            
-            # Registrar historial de estado
-            self._registrar_historial_estado(pedido_id, estado_anterior, nuevo_estado)
-            
-            # Efectos laterales: cuenta corriente B2B
-            if estado_anterior == "LISTO" and nuevo_estado == "ENTREGADO":
-                if self._es_cliente_b2b(db_pedido.cliente_persona_id):
-                    self._ajustar_cuenta_corriente(db_pedido.cliente_persona_id, db_pedido.total)
-            elif estado_anterior == "ENTREGADO" and nuevo_estado == "LISTO":
-                if self._es_cliente_b2b(db_pedido.cliente_persona_id):
-                    self._ajustar_cuenta_corriente(db_pedido.cliente_persona_id, -db_pedido.total)
-        
+        nuevo_estado = update_data.pop("estado", None)
+
         for field, value in update_data.items():
             setattr(db_pedido, field, value)
-        
-        self.db.commit()
-        self.db.refresh(db_pedido)
+
+        if nuevo_estado is not None and nuevo_estado != estado_anterior:
+            # La transición y sus efectos (venta, deuda, historial) viven en un
+            # único lugar; acá solo se delega.
+            self.cambiar_estado_pedido(pedido_id, nuevo_estado, usuario_id)
+        else:
+            self.db.commit()
+            self.db.refresh(db_pedido)
+
         return db_pedido
 
     def _descontar_stock_lotes(self, lotes: List[models.Lote], cantidad: Decimal):
@@ -507,32 +485,64 @@ class PedidoService:
         self.db.commit()
         return True
 
-    def cambiar_estado_pedido(self, pedido_id: int, nuevo_estado: str, usuario_id: Optional[int] = None) -> Optional[models.Pedido]:
-        """Cambiar estado del pedido con validación de transiciones"""
+    def cambiar_estado_pedido(
+        self,
+        pedido_id: int,
+        nuevo_estado: str,
+        usuario_id: Optional[int] = None,
+        *,
+        condicion_pago: Optional[CondicionPago] = None,
+        metodo_de_pago: Optional[models.MetodoPago] = None,
+        plazo_dias: Optional[int] = None,
+        cuenta_id: Optional[int] = None,
+    ) -> Optional[models.Pedido]:
+        """Cambiar estado del pedido con validación de transiciones.
+
+        Es el único punto que crea la venta y mueve la deuda: al pasar a
+        ``ENTREGADO`` delega en ``ventas.services.registrar_venta_de_entrega``
+        dentro de esta misma transacción, así que un fallo de la venta deja el
+        pedido como estaba y sin deuda. La condición de pago es obligatoria para
+        entregar.
+
+        Revertir ``ENTREGADO`` a ``LISTO`` se rechaza con
+        ``PedidoConVentaVigente`` si el pedido ya tiene una venta vigente: hay
+        que anular la venta primero para no dejar la venta huérfana.
+        """
         db_pedido = crud.get_pedido(self.db, pedido_id)
         if not db_pedido:
             return None
-        
+
         estado_anterior = db_pedido.estado
-        
+
         if not self._validar_transicion_estado(estado_anterior, nuevo_estado):
-            raise ValueError(f"Transición inválida: {estado_anterior} -> {nuevo_estado}")
-        
-        # Actualizar estado
-        db_pedido.estado = nuevo_estado
-        
-        # Registrar historial
-        self._registrar_historial_estado(pedido_id, estado_anterior, nuevo_estado, usuario_id)
-        
-        # Efectos laterales: cuenta corriente B2B
-        if estado_anterior == "LISTO" and nuevo_estado == "ENTREGADO":
-            if self._es_cliente_b2b(db_pedido.cliente_persona_id):
-                self._ajustar_cuenta_corriente(db_pedido.cliente_persona_id, db_pedido.total)
-        elif estado_anterior == "ENTREGADO" and nuevo_estado == "LISTO":
-            if self._es_cliente_b2b(db_pedido.cliente_persona_id):
-                self._ajustar_cuenta_corriente(db_pedido.cliente_persona_id, -db_pedido.total)
-        
-        self.db.commit()
+            raise TransicionInvalida(estado_anterior, nuevo_estado)
+
+        try:
+            if estado_anterior == "ENTREGADO" and nuevo_estado == "LISTO":
+                if ventas_services.tiene_venta_vigente(self.db, pedido_id):
+                    raise PedidoConVentaVigente(pedido_id)
+
+            if nuevo_estado == "ENTREGADO":
+                if condicion_pago is None:
+                    raise CondicionDePagoRequerida()
+                ventas_services.registrar_venta_de_entrega(
+                    self.db,
+                    db_pedido,
+                    condicion_pago,
+                    metodo_de_pago=metodo_de_pago,
+                    plazo_dias=plazo_dias,
+                    cuenta_id=cuenta_id,
+                )
+
+            db_pedido.estado = nuevo_estado
+            self._registrar_historial_estado(
+                pedido_id, estado_anterior, nuevo_estado, usuario_id
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
         self.db.refresh(db_pedido)
         return db_pedido
 
@@ -646,6 +656,38 @@ class PedidoNoEncontrado(Exception):
     def __init__(self, pedido_id: int) -> None:
         self.pedido_id = pedido_id
         super().__init__(f"No existe un pedido con id {pedido_id}.")
+
+
+class PedidoConVentaVigente(Exception):
+    """El pedido ya tiene una venta vigente y no se puede revertir la entrega."""
+
+    def __init__(self, pedido_id: int) -> None:
+        self.pedido_id = pedido_id
+        super().__init__(
+            f"El pedido {pedido_id} tiene una venta vigente: anulá la venta "
+            "antes de revertir la entrega a Listo."
+        )
+
+
+class TransicionInvalida(ValueError):
+    """El estado actual del pedido no permite el estado pedido."""
+
+    def __init__(self, estado_actual: str, estado_nuevo: str) -> None:
+        self.estado_actual = estado_actual
+        self.estado_nuevo = estado_nuevo
+        super().__init__(
+            f"Transición inválida: {estado_actual} -> {estado_nuevo}"
+        )
+
+
+class CondicionDePagoRequerida(ValueError):
+    """La entrega no indicó cómo se paga el pedido."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Para entregar el pedido hay que indicar la condición de pago: "
+            "CONTADO o PAGARE."
+        )
 
 
 _ESTADOS_FRONTEND = {
@@ -794,6 +836,11 @@ class PedidoPanelService:
         )
         return empleado.persona_id if empleado else None
 
+    def resolver_cuenta_actual(self, email: str) -> Optional[int]:
+        """Devuelve el id de la cuenta autenticada para auditar la venta."""
+        cuenta = self.db.query(Cuenta).filter(Cuenta.correo == email).first()
+        return cuenta.id if cuenta is not None else None
+
     def crear(
         self,
         datos: schemas.PedidoPanelCreate,
@@ -806,6 +853,14 @@ class PedidoPanelService:
             raise ValueError("Cliente inválido.") from None
 
         objetivo = estado_canonico(datos.estado)
+        if objetivo == "ENTREGADO":
+            # La venta nace al entregar y la condición de pago se elige en ese
+            # momento: un pedido nuevo no puede nacer ya entregado.
+            raise ValueError(
+                "Un pedido no puede crearse ya entregado: guardalo y confirmá "
+                "la entrega desde el panel para registrar la venta."
+            )
+
         detalles = [self._detalle_desde_item(item) for item in datos.items]
 
         pedido_in = schemas.PedidoCreate(
@@ -827,19 +882,45 @@ class PedidoPanelService:
 
         return self._leer(pedido.id)
 
-    def _cambiar_estado(self, pedido: models.Pedido, objetivo: str) -> None:
+    def _cambiar_estado(
+        self,
+        pedido: models.Pedido,
+        objetivo: str,
+        *,
+        condicion_pago: Optional[CondicionPago] = None,
+        metodo_de_pago: Optional[models.MetodoPago] = None,
+        plazo_dias: Optional[int] = None,
+        cuenta_id: Optional[int] = None,
+    ) -> None:
         """Lleva el pedido al estado objetivo respetando las transiciones.
 
         El panel permite mover una tarjeta de Pendiente a Entregado (o al
-        revés); se pasa por Listo para no saltear la regla de negocio ni los
-        efectos sobre la cuenta corriente.
+        revés); se pasa por Listo para no saltear la regla de negocio. La
+        condición de pago y la cuenta solo se reenvían en el salto final a
+        ``ENTREGADO``, que es el que crea la venta.
         """
         actual = pedido.estado
         if actual == objetivo:
+            # Reentregar un pedido ya entregado no debe duplicar la venta.
+            if objetivo == "ENTREGADO" and ventas_services.tiene_venta_vigente(
+                self.db, pedido.id
+            ):
+                raise ventas_services.VentaDuplicada(pedido.id)
             return
 
+        entrega = {
+            "condicion_pago": condicion_pago,
+            "metodo_de_pago": metodo_de_pago,
+            "plazo_dias": plazo_dias,
+            "cuenta_id": cuenta_id,
+        }
+
         if self.pedidos._validar_transicion_estado(actual, objetivo):
-            self.pedidos.cambiar_estado_pedido(pedido.id, objetivo)
+            self.pedidos.cambiar_estado_pedido(
+                pedido.id,
+                objetivo,
+                **entrega if objetivo == "ENTREGADO" else {},
+            )
             return
 
         intermedio = "LISTO"
@@ -848,13 +929,20 @@ class PedidoPanelService:
             and self.pedidos._validar_transicion_estado(intermedio, objetivo)
         ):
             self.pedidos.cambiar_estado_pedido(pedido.id, intermedio)
-            self.pedidos.cambiar_estado_pedido(pedido.id, objetivo)
+            self.pedidos.cambiar_estado_pedido(
+                pedido.id,
+                objetivo,
+                **entrega if objetivo == "ENTREGADO" else {},
+            )
             return
 
-        raise ValueError(f"Transición inválida: {actual} -> {objetivo}")
+        raise TransicionInvalida(actual, objetivo)
 
     def actualizar(
-        self, pedido_id: int, datos: schemas.PedidoPanelUpdate
+        self,
+        pedido_id: int,
+        datos: schemas.PedidoPanelUpdate,
+        cuenta_id: Optional[int] = None,
     ) -> schemas.PedidoPanelRead:
         """Actualiza cliente, campos simples, ítems y estado."""
         pedido = crud.get_pedido(self.db, pedido_id)
@@ -902,7 +990,14 @@ class PedidoPanelService:
             pedido_actualizado = crud.get_pedido(self.db, pedido_id)
             if pedido_actualizado is None:
                 raise PedidoNoEncontrado(pedido_id)
-            self._cambiar_estado(pedido_actualizado, objetivo)
+            self._cambiar_estado(
+                pedido_actualizado,
+                objetivo,
+                condicion_pago=datos.condicionPago,
+                metodo_de_pago=datos.metodoPago,
+                plazo_dias=datos.plazoDias,
+                cuenta_id=cuenta_id,
+            )
 
         return self._leer(pedido_id)
 

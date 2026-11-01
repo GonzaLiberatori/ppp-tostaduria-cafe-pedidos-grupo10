@@ -75,12 +75,18 @@ def obtener_por_comprobante(
 def obtener_vigente_por_pedido(
     db: Session, pedido_id: int
 ) -> Optional[VentaComercial]:
-    """Devuelve la venta CONFIRMADA del pedido, o ``None``."""
+    """Devuelve la venta vigente del pedido, o ``None``.
+
+    Vigente es ``CONFIRMADA`` o ``PENDIENTE_COBRO``: la venta a pagaré ya ocupa
+    el lugar de la venta del pedido aunque todavía no se haya cobrado.
+    """
     return (
         db.query(VentaComercial)
         .filter(
             VentaComercial.pedido_id == pedido_id,
-            VentaComercial.estado == VentaEstado.CONFIRMADA,
+            VentaComercial.estado.in_(
+                (VentaEstado.CONFIRMADA, VentaEstado.PENDIENTE_COBRO)
+            ),
         )
         .first()
     )
@@ -190,11 +196,15 @@ def totales_generales(
     fecha_desde: Optional[datetime] = None,
     fecha_hasta: Optional[datetime] = None,
 ) -> tuple[int, Decimal]:
-    """Cantidad de ventas vigentes y total facturado del rango."""
+    """Cantidad de ventas facturadas y total facturado del rango.
+
+    "Facturada" es toda venta no anulada, incluidas las ``PENDIENTE_COBRO``: el
+    total mide lo vendido, no lo cobrado. La cobranza se consulta aparte.
+    """
     consulta = db.query(
         func.count(VentaComercial.id),
         func.coalesce(func.sum(VentaComercial.total), 0),
-    ).filter(VentaComercial.estado == VentaEstado.CONFIRMADA)
+    ).filter(VentaComercial.estado != VentaEstado.ANULADA)
     consulta = _filtrar_por_fechas(consulta, fecha_desde, fecha_hasta)
 
     cantidad, total = consulta.one()
@@ -219,3 +229,154 @@ def totales_por_metodo(
 
     filas = consulta.group_by(PagoVenta.metodo_de_pago).all()
     return [(metodo, Decimal(str(total or 0))) for metodo, total in filas]
+
+
+def resumen_por_mes(
+    db: Session,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+) -> list[tuple[str, int, Decimal]]:
+    """Cantidad y total facturado por mes calendario, sin anuladas.
+
+    La clave es ``AAAA-MM`` y se calcula con ``strftime`` de SQLite. La consulta
+    queda aislada acá para que un cambio de motor solo obligue a reescribir esta
+    función.
+    """
+    mes = func.strftime("%Y-%m", VentaComercial.fecha)
+    consulta = db.query(
+        mes,
+        func.count(VentaComercial.id),
+        func.coalesce(func.sum(VentaComercial.total), 0),
+    ).filter(VentaComercial.estado != VentaEstado.ANULADA)
+    consulta = _filtrar_por_fechas(consulta, fecha_desde, fecha_hasta)
+
+    filas = consulta.group_by(mes).order_by(mes.desc()).all()
+    return [
+        (str(clave), int(cantidad or 0), Decimal(str(total or 0)))
+        for clave, cantidad, total in filas
+    ]
+
+
+def totales_por_mes_y_metodo(
+    db: Session,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+) -> list[tuple[str, str, Decimal]]:
+    """Total cobrado por mes calendario y método de pago, sin anuladas."""
+    mes = func.strftime("%Y-%m", VentaComercial.fecha)
+    consulta = (
+        db.query(
+            mes,
+            PagoVenta.metodo_de_pago,
+            func.coalesce(func.sum(PagoVenta.monto), 0),
+        )
+        .join(VentaComercial, VentaComercial.id == PagoVenta.venta_id)
+        .filter(VentaComercial.estado == VentaEstado.CONFIRMADA)
+    )
+    consulta = _filtrar_por_fechas(consulta, fecha_desde, fecha_hasta)
+
+    filas = consulta.group_by(mes, PagoVenta.metodo_de_pago).order_by(mes.desc()).all()
+    return [
+        (str(clave), metodo, Decimal(str(total or 0)))
+        for clave, metodo, total in filas
+    ]
+
+
+def _filtrar_cobros_por_fechas(
+    consulta: Query,
+    fecha_desde: Optional[datetime],
+    fecha_hasta: Optional[datetime],
+) -> Query:
+    """Aplica el rango de fechas sobre el momento del cobro.
+
+    La cobranza se mide por ``cobrada_en``, no por la fecha de la venta: un
+    pagaré facturado en agosto y cobrado en septiembre pertenece a septiembre.
+    """
+    if fecha_desde is not None:
+        consulta = consulta.filter(VentaComercial.cobrada_en >= fecha_desde)
+    if fecha_hasta is not None:
+        consulta = consulta.filter(VentaComercial.cobrada_en <= fecha_hasta)
+    return consulta
+
+
+def cobranza_por_mes(
+    db: Session,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+) -> list[tuple[str, int, Decimal]]:
+    """Cantidad de cobros y total cobrado por mes de cobro, sin anuladas.
+
+    Solo entran las ventas con ``cobrada_en``: las pendientes de cobro y las
+    anuladas quedan afuera porque todavía no representan dinero cobrado.
+    """
+    mes = func.strftime("%Y-%m", VentaComercial.cobrada_en)
+    consulta = db.query(
+        mes,
+        func.count(VentaComercial.id),
+        func.coalesce(func.sum(VentaComercial.total), 0),
+    ).filter(
+        VentaComercial.cobrada_en.isnot(None),
+        VentaComercial.estado != VentaEstado.ANULADA,
+    )
+    consulta = _filtrar_cobros_por_fechas(consulta, fecha_desde, fecha_hasta)
+
+    filas = consulta.group_by(mes).order_by(mes.desc()).all()
+    return [
+        (str(clave), int(cantidad or 0), Decimal(str(total or 0)))
+        for clave, cantidad, total in filas
+    ]
+
+
+def totales_de_cobranza_por_metodo(
+    db: Session,
+    fecha_desde: Optional[datetime] = None,
+    fecha_hasta: Optional[datetime] = None,
+) -> list[tuple[str, str, Decimal]]:
+    """Total cobrado por mes de cobro y método de pago, sin anuladas."""
+    mes = func.strftime("%Y-%m", VentaComercial.cobrada_en)
+    consulta = (
+        db.query(
+            mes,
+            PagoVenta.metodo_de_pago,
+            func.coalesce(func.sum(PagoVenta.monto), 0),
+        )
+        .join(VentaComercial, VentaComercial.id == PagoVenta.venta_id)
+        .filter(
+            VentaComercial.cobrada_en.isnot(None),
+            VentaComercial.estado != VentaEstado.ANULADA,
+        )
+    )
+    consulta = _filtrar_cobros_por_fechas(consulta, fecha_desde, fecha_hasta)
+
+    filas = (
+        consulta.group_by(mes, PagoVenta.metodo_de_pago).order_by(mes.desc()).all()
+    )
+    return [
+        (str(clave), metodo, Decimal(str(total or 0)))
+        for clave, metodo, total in filas
+    ]
+
+
+def pendientes_de_cobro(
+    db: Session,
+) -> list[tuple[VentaComercial, Optional[int], Optional[str], Optional[str]]]:
+    """Ventas ``PENDIENTE_COBRO`` ordenadas por vencimiento ascendente.
+
+    Devuelve tuplas ``(venta, cliente_persona_id, nombre, apellido)`` con joins
+    externos, igual que el listado: una venta cuyo pedido o cliente ya no exista
+    sigue apareciendo para no perder deuda de vista. La marca de vencida se
+    calcula en el servicio.
+    """
+    return (
+        db.query(
+            VentaComercial,
+            Pedido.cliente_persona_id,
+            Persona.nombre,
+            Persona.apellido,
+        )
+        .outerjoin(Pedido, Pedido.id == VentaComercial.pedido_id)
+        .outerjoin(Persona, Persona.id == Pedido.cliente_persona_id)
+        .filter(VentaComercial.estado == VentaEstado.PENDIENTE_COBRO)
+        .order_by(VentaComercial.fecha_vencimiento.asc(), VentaComercial.id.asc())
+        .all()
+    )
