@@ -17,30 +17,58 @@ El sistema DEBE permitir cambiar estado de Pendiente a Listo indicando que el pe
 - **THEN** sistema rechaza con error 409 (transicion invalida)
 
 ### Requirement: Transicion Listo -> Entregado (entrega confirmada)
-El sistema DEBE permitir cambiar estado de Listo a Entregado confirmando la entrega fisica. Al entregar, si el cliente es B2B con cuenta corriente, el sistema DEBE registrar el cargo en la cuenta corriente del cliente (sumar al monto de deuda) dentro de la misma transaccion.
+El sistema DEBE permitir cambiar estado de Listo a Entregado confirmando la entrega fisica e indicando la condicion de pago. En la misma transaccion DEBE registrarse la venta del pedido. Solo las ventas a pagare de clientes B2B suman el total a la cuenta corriente; las ventas al contado no generan deuda.
 
 #### Scenario: Entrega a cliente B2B actualiza cuenta corriente
-- **WHEN** usuario cambia estado de Listo a Entregado para cliente B2B
-- **THEN** sistema actualiza estado a Entregado, registra timestamp de entrega, y suma el total del pedido a la cuenta corriente del cliente (montoDeuda += total)
+- **WHEN** usuario cambia estado de Listo a Entregado para cliente B2B indicando pagare a 30 dias
+- **THEN** sistema actualiza estado a Entregado, registra la venta pendiente de cobro con su vencimiento y suma el total del pedido a la cuenta corriente del cliente
 
 #### Scenario: Entrega a cliente B2C no afecta cuenta corriente
-- **WHEN** usuario cambia estado de Listo a Entregado para cliente B2C
-- **THEN** sistema actualiza estado a Entregado, registra timestamp, NO modifica cuenta corriente (B2C paga al contado)
+- **WHEN** usuario cambia estado de Listo a Entregado para cliente B2C al contado
+- **THEN** sistema actualiza estado a Entregado, registra la venta confirmada con ese metodo y NO modifica la cuenta corriente del cliente
+
+#### Scenario: Entrega al contado de un cliente B2B no genera deuda
+- **WHEN** usuario cambia estado de Listo a Entregado para cliente B2B indicando condicion al contado con metodo transferencia
+- **THEN** sistema actualiza estado a Entregado, registra la venta confirmada y NO suma nada a la cuenta corriente del cliente
+
+#### Scenario: Entrega a pagare de cliente B2C rechazada
+- **WHEN** usuario intenta entregar a pagare un pedido de un cliente que no es B2B
+- **THEN** sistema rechaza la operacion con error 409, no cambia el estado y no registra la venta
+
+#### Scenario: Entrega sin condicion de pago
+- **WHEN** usuario intenta pasar un pedido de Listo a Entregado sin indicar condicion de pago
+- **THEN** sistema responde 422 por validacion de entrada y el pedido sigue en Listo
+
+#### Scenario: Fallo al registrar la venta
+- **WHEN** falla el registro de la venta durante la entrega
+- **THEN** el pedido sigue en Listo, no se descuenta deuda y no queda una venta parcial
+
+#### Scenario: Pedido con venta vigente
+- **WHEN** usuario intenta entregar un pedido que ya tiene una venta vigente
+- **THEN** sistema responde 409 y no duplica la venta
 
 #### Scenario: Rechazo si pedido no esta Listo
 - **WHEN** usuario intenta entregar un pedido Pendiente (saltandose Listo)
 - **THEN** sistema rechaza con error 409 (se requiere pasar por Listo)
 
 ### Requirement: Transicion inversa Entregado -> Listo (correccion de error)
-El sistema DEBE permitir revertir de Entregado a Listo solo como correccion operativa (ej. marca equivocada). Al revertir, DEBE restar el total de la cuenta corriente del cliente B2B (montoDeuda -= total) en la misma transaccion.
+El sistema DEBE permitir revertir de Entregado a Listo solo como correccion operativa (ej. marca equivocada). Si el pedido tiene una venta vigente, la reversion DEBE rechazarse con 409 hasta que esa venta se anule. Sin venta vigente, la reversion no modifica la cuenta corriente.
+
+#### Scenario: Reversion rechazada con venta vigente
+- **WHEN** usuario intenta revertir a Listo un pedido entregado cuya venta sigue vigente
+- **THEN** sistema responde 409 indicando que primero debe anularse la venta y el pedido sigue en Entregado
 
 #### Scenario: Reversion de entrega a cliente B2B
-- **WHEN** usuario cambia estado de Entregado a Listo para cliente B2B
-- **THEN** sistema actualiza estado a Listo, resta el total de la cuenta corriente del cliente
+- **WHEN** usuario revierte a Listo un pedido entregado de un cliente B2B que no tiene venta vigente
+- **THEN** sistema actualiza estado a Listo y NO modifica la cuenta corriente del cliente
 
 #### Scenario: Reversion de entrega a cliente B2C
-- **WHEN** usuario cambia estado de Entregado a Listo para cliente B2C
-- **THEN** sistema actualiza estado a Listo, NO modifica cuenta corriente
+- **WHEN** usuario revierte a Listo un pedido entregado de un cliente B2C
+- **THEN** sistema actualiza estado a Listo y NO modifica la cuenta corriente
+
+#### Scenario: Reversion permitida tras anular la venta
+- **WHEN** usuario anula la venta del pedido y luego revierte el estado a Listo
+- **THEN** sistema actualiza el estado a Listo
 
 ### Requirement: Transicion inversa Listo -> Pendiente (cancelacion de preparacion)
 El sistema DEBE permitir volver de Listo a Pendiente si la preparacion no se completo. NO DEBE haber efectos sobre stock (ya consumido al crear) ni cuenta corriente.

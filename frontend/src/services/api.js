@@ -159,6 +159,24 @@ export const api = {
   createGasto: (data) => request('/gastos/', { method: 'POST', body: data }),
   updateGasto: (id, data) => request(`/gastos/${id}`, { method: 'PATCH', body: data }),
   deleteGasto: (id) => request(`/gastos/${id}`, { method: 'DELETE' }),
+
+  // Ventas (contabilidad)
+  getVentas: (params = {}) => request(conQuery('/ventas/', params)),
+  getResumenMensualVentas: (params = {}) => request(
+    conQuery('/ventas/resumen-mensual', params),
+  ),
+  getCobranzaMensualVentas: (params = {}) => request(
+    conQuery('/ventas/cobranza-mensual', params),
+  ),
+  getPorCobrarVentas: () => request('/ventas/por-cobrar'),
+  cobrarVenta: (id, data) => request(`/ventas/${id}/cobrar`, {
+    method: 'POST',
+    body: data,
+  }),
+  anularVenta: (id, motivo) => request(`/ventas/${id}/anular`, {
+    method: 'POST',
+    body: { motivo },
+  }),
 };
 
 export { ApiError };

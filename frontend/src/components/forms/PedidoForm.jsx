@@ -33,6 +33,13 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
     [stock],
   )
 
+  // La entrega crea la venta y exige la condición de pago, así que no se elige
+  // desde el formulario: se confirma desde el kanban con el modal de entrega.
+  const estadosDisponibles = useMemo(
+    () => ESTADOS_PEDIDO.filter(estado => estado.value !== 'Entregado'),
+    [],
+  )
+
   // Al editar, el stock del pedido ya fue descontado: se suma de vuelta para
   // que la validación local no rechace los mismos kilos.
   const reservadoPorStock = useMemo(() => {
@@ -127,7 +134,9 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
 
     const data = {
       clienteId: formData.clienteId,
-      estado: formData.estado,
+      // Un pedido ya entregado no reenvía el estado: la entrega se gestiona
+      // desde el kanban y volver a mandarlo exigiría una condición de pago.
+      ...(formData.estado !== 'Entregado' ? { estado: formData.estado } : {}),
       medioContacto: formData.medioContacto,
       observaciones: formData.observaciones.trim(),
       items: formData.items.map(item => ({
@@ -210,13 +219,22 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
             placeholder="Seleccionar cliente"
             error={errors.clienteId}
           />
-          <Select
-            label="Estado"
-            name="estado"
-            value={formData.estado}
-            onChange={handleChange}
-            options={ESTADOS_PEDIDO}
-          />
+          {formData.estado === 'Entregado' ? (
+            <Input
+              label="Estado"
+              value="Entregado"
+              disabled
+              help="La entrega ya fue confirmada; el estado se gestiona desde el kanban."
+            />
+          ) : (
+            <Select
+              label="Estado"
+              name="estado"
+              value={formData.estado}
+              onChange={handleChange}
+              options={estadosDisponibles}
+            />
+          )}
         </div>
 
         <Select

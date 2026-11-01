@@ -1,6 +1,8 @@
 # Feature Pedidos: documentación técnica y funcional
 
-> **Estado:** núcleo implementado, fusionado en `main` y cubierto por pruebas de servicios y CRUD.
+> **Estado:** núcleo implementado, fusionado en `main` y cubierto por pruebas de
+> schemas, servicios, CRUD y router. El cambio `005` integró la venta y los
+> métodos de pago al confirmar la entrega.
 >
 > **Base de análisis:** árbol de trabajo actual de `main`. La rama `feature/pedidos`
 > aportó el núcleo de negocio y la API canónica; la integración posterior agregó
@@ -14,8 +16,10 @@
 | Merge en `main` | `0545e92` — `Merge branch 'feature/pedidos'` (29/10/2026) |
 | Módulo backend | `backend/app/modules/pedidos/` |
 | Frontend | `frontend/src/pages/Pedidos.jsx`, `frontend/src/components/forms/PedidoForm.jsx` |
-| Cambio OpenSpec | `openspec/changes/002pedidos/` |
+| Cambios OpenSpec | `openspec/changes/002pedidos/`, `005-ventas-integracion-metodos-de-pagos/` |
 | Spec vigente | `openspec/specs/pedidos/spec.md` |
+| Spec delta de la entrega | `openspec/changes/005-ventas-integracion-metodos-de-pagos/specs/pedidos/estado/spec.md` |
+| Documentación de la venta | [`docs/feature-ventas.md`](feature-ventas.md) |
 
 ## Índice
 
@@ -43,16 +47,22 @@ El módulo de pedidos cubre el ciclo de vida de una venta de café tostado:
 2. **Reserva de stock**: se descuenta café tostado de los lotes disponibles con
    criterio FIFO (primero en vencer, primero en salir).
 3. **Preparación y entrega**: el pedido avanza por los estados
-   `PENDIENTE → LISTO → ENTREGADO`, con registro de cada cambio.
-4. **Cuenta corriente B2B**: al entregar un pedido de un cliente mayorista, el
-   total se suma a su saldo; si la entrega se revierte, el saldo se descuenta.
-5. **Cancelación**: un pedido `PENDIENTE` puede eliminarse y el stock vuelve a
+   `PENDIENTE → LISTO → ENTREGADO`, con registro de cada cambio. Al confirmar la
+   entrega el panel pide la **condición de pago** (`CONTADO` o `PAGARE`).
+4. **Venta al entregar**: la entrega delega en el módulo `ventas` la creación de
+   la venta dentro de la misma transacción. Al contado nace `CONFIRMADA`; a
+   pagaré nace `PENDIENTE_COBRO` con vencimiento a 30/60/90 días.
+5. **Cuenta corriente B2B**: desde 005 la deuda la administra `ventas`. Un pagaré
+   suma al saldo del cliente al crearse, lo descuenta al cobrarse y lo revierte
+   al anularse. Un pedido entregado no puede volver a `LISTO` mientras tenga una
+   venta vigente.
+6. **Cancelación**: un pedido `PENDIENTE` puede eliminarse y el stock vuelve a
    los lotes.
 
 El panel administrativo ofrece vista de tabla y tablero Kanban, filtros por
-cliente/estado/texto, alta y edición en modal, detalle y eliminación. El portal
-de clientes reutiliza el mismo adaptador `/panel` para que un cliente registre
-su propio pedido.
+cliente/estado/texto, alta y edición en modal, modal de confirmación de entrega,
+detalle con la condición de cobro y eliminación. El portal de clientes reutiliza
+el mismo adaptador `/panel` para que un cliente registre su propio pedido.
 
 ---
 
@@ -66,13 +76,17 @@ su propio pedido.
 - Idempotencia en la API canónica mediante `idempotency_key`.
 - Listado, detalle, edición y eliminación.
 - Máquina de estados con historial de auditoría.
-- Efectos sobre la cuenta corriente de clientes mayoristas.
+- Venta creada al confirmar la entrega, con condición de pago `CONTADO` o
+  `PAGARE` y plazo de 30/60/90 días.
+- Efectos sobre la cuenta corriente de clientes mayoristas, delegados en
+  `ventas`.
 - Adaptador de contrato plano para el panel (`/pedidos/panel`).
 - Pruebas de CRUD y de reglas de negocio.
 
 ### 2.2 Fuera de alcance
 
 - Pasarelas de pago y conciliación.
+- Cobros parciales o múltiples cobros por venta: el pagaré se cobra entero.
 - Facturación electrónica.
 - Gestión de envíos programados (pertenece al módulo `envios`).
 - Notificaciones por email, WhatsApp o push.
@@ -142,9 +156,11 @@ erDiagram
     VENTA }o--|| PAGO : "paga"
 ```
 
-`Pago` y `Venta` existen en el módulo, pero el flujo actual de pedidos no las
-crea ni las consulta. Son parte del modelo heredado y quedan para una etapa
-posterior.
+`Pago` y `Venta` son tablas heredadas del módulo y siguen mapeadas, pero **no se
+usan**: desde 003 la venta formal vive en `ventas/models.py` (`venta_comercial`,
+`pago_venta`) y desde 005 se crea al confirmar la entrega. La relación `PEDIDO →
+VENTA` del diagrama representa ese vínculo por clave foránea, no una relación ORM
+de `pedidos`.
 
 ### 4.2 Tabla `pedido`
 
@@ -285,21 +301,26 @@ stateDiagram-v2
     PENDIENTE --> LISTO
     LISTO --> PENDIENTE
     LISTO --> ENTREGADO
-    ENTREGADO --> LISTO
+    ENTREGADO --> LISTO: solo sin venta vigente
 ```
 
 | Transición | Significado | Efecto lateral |
 |---|---|---|
 | `PENDIENTE → LISTO` | Preparación completada. | Ninguno sobre stock ni cuenta corriente. |
 | `LISTO → PENDIENTE` | Se cancela la preparación. | Ninguno. |
-| `LISTO → ENTREGADO` | Entrega confirmada. | Suma el total al saldo del cliente B2B. |
-| `ENTREGADO → LISTO` | Corrección de una entrega. | Resta el total del saldo del cliente B2B. |
+| `LISTO → ENTREGADO` | Entrega confirmada. | Crea la venta (contado o pagaré); el pagaré suma la deuda al cliente B2B. |
+| `ENTREGADO → LISTO` | Corrección de una entrega. | Se rechaza con `409` si hay venta `CONFIRMADA` o `PENDIENTE_COBRO`; sin venta vigente no toca el saldo. |
 
 Reglas adicionales:
 
 - Cada cambio registra una fila en `pedido_estado_historial`.
-- Una transición no listada se rechaza con error de negocio (HTTP 400 en la
-  implementación actual).
+- Una transición no listada se rechaza con error de negocio (HTTP 400/409 según
+  el caso).
+- La entrega exige `condicionPago`; sin ella el `PATCH` del panel responde `422`.
+  Al contado se informa `metodoPago`; a pagaré, `plazoDias` (30, 60 o 90).
+- Un pedido a pagaré solo se admite para clientes B2B (`409` si es minorista).
+- Reentregar un pedido ya `ENTREGADO` con una venta vigente responde `409`: no se
+  duplica la venta.
 - El panel permite mover una tarjeta de `Pendiente` a `Entregado` (o al revés)
   pasando internamente por `LISTO`, para no saltear la regla de negocio ni los
   efectos de cuenta corriente.
@@ -310,8 +331,12 @@ Reglas adicionales:
 
 - `Cliente.es_b2b` es una propiedad derivada: `tipo == "Mayorista"`.
 - `saldo_cuenta_corriente` es un `Numeric(12,2)` con default `0`.
-- Solo se modifica en transiciones hacia/desde `ENTREGADO`.
-- Un cliente `Consumidor Final` nunca modifica su saldo por pedidos.
+- Desde 005 la deuda la administra `ventas` y se modifica al crear, cobrar o
+  anular un pagaré, siempre vía
+  `clientes.services.ajustar_saldo_cuenta_corriente`. La entrega al contado no
+  toca el saldo.
+- Un cliente `Consumidor Final` nunca compra a pagaré ni modifica su saldo por
+  pedidos.
 - No se valida `limite_credito`; el saldo puede superarlo.
 
 ### 5.6 Eliminación y devolución de stock
@@ -405,9 +430,9 @@ Respuesta representativa:
 
 Notas del adaptador:
 
-- `estado` acepta `Pendiente`, `Listo` o `Entregado`, sin distinguir mayúsculas.
-  Si se crea como `Entregado`, el servicio pasa por `Listo` para aplicar los
-  efectos de cuenta corriente.
+- `estado` acepta `Pendiente` o `Listo`, sin distinguir mayúsculas. Un pedido
+  **no puede crearse ya `Entregado`**: el servicio responde `400` porque la venta
+  nace al confirmar la entrega y necesita la condición de pago.
 - `metodo_de_despacho` se fija en `"Retiro en local"`; el panel no lo edita.
 - `total` y `precioKg` enviados por el cliente se ignoran: el backend calcula.
 - Para clientes autoservicio, `empleado_persona_id` queda en `NULL`.
@@ -427,6 +452,23 @@ Content-Type: application/json
 También acepta `clienteId`, `medioContacto` e `items`. Si se envían `items`, el
 servicio devuelve el stock anterior y descuenta el nuevo. El cambio de cliente
 solo se permite mientras el pedido está `Pendiente`.
+
+Para confirmar la entrega se envía el estado junto con la condición de pago:
+
+```http
+PATCH /api/v1/pedidos/panel/12
+Content-Type: application/json
+
+{
+  "estado": "Entregado",
+  "condicionPago": "PAGARE",
+  "plazoDias": 30
+}
+```
+
+Al contado: `{"estado": "Entregado", "condicionPago": "CONTADO", "metodoPago":
+"TRANSFERENCIA"}`. La venta se crea en la misma transacción; ver
+[`docs/feature-ventas.md`](feature-ventas.md).
 
 ### 6.3 Endpoints canónicos
 
@@ -502,14 +544,16 @@ El módulo expone endpoints de consulta bajo `/api/v1/pedidos/stock/` y
 
 | Código | Cuándo |
 |---|---|
-| `400` | Stock insuficiente, transición inválida, pedido no eliminable, producto inválido, cliente inválido. |
+| `400` | Stock insuficiente, pedido no eliminable, producto inválido, cliente inválido, alta con estado `Entregado`. |
 | `401` | Token ausente, vencido o inválido. |
 | `403` | La API canónica de alta se usa con un usuario que no es empleado. |
 | `404` | Pedido, cliente, usuario o persona inexistente. |
-| `422` | Payload inválido según Pydantic (campos faltantes, kilos ≤ 0, etc.). |
+| `409` | Transición inválida, pagaré a un cliente no B2B, reversión de una entrega con venta vigente o entrega duplicada. |
+| `422` | Payload inválido según Pydantic (campos faltantes, kilos ≤ 0, entrega sin `condicionPago` o plazo fuera de 30/60/90). |
 
 La spec original menciona `409` para transiciones inválidas; la implementación
-actual devuelve `400`. Ver [Limitaciones](#10-limitaciones-y-deuda-técnica).
+actual devuelve `409` en el `PATCH` del panel y `400` en la API canónica. Ver
+[Limitaciones](#10-limitaciones-y-deuda-técnica).
 
 ---
 
@@ -531,18 +575,20 @@ los endpoints de pedidos.
 
 | Archivo | Función |
 |---|---|
-| `frontend/src/pages/Pedidos.jsx` | Tabla, Kanban, filtros, detalle, edición y eliminación. |
-| `frontend/src/components/forms/PedidoForm.jsx` | Alta/edición con cliente, estado, contacto, observaciones e ítems. |
-| `frontend/src/context/DataContext.jsx` | Carga inicial y mutaciones; refresca stock y clientes. |
+| `frontend/src/pages/Pedidos.jsx` | Tabla, Kanban, filtros, detalle, edición, eliminación y modal "Confirmar entrega". |
+| `frontend/src/components/forms/PedidoForm.jsx` | Alta/edición con cliente, estado, contacto, observaciones e ítems. No ofrece `Entregado`. |
+| `frontend/src/context/DataContext.jsx` | Carga inicial y mutaciones; refresca stock, clientes y ventas tras una entrega. |
 | `frontend/src/services/api.js` | Cliente HTTP con JWT y traducción de errores. |
 
 ### 7.3 Flujo de datos
 
-1. Al iniciar sesión, `DataContext` carga en paralelo stock, clientes, pedidos y
-   gastos.
+1. Al iniciar sesión, `DataContext` carga en paralelo stock, clientes, pedidos,
+   gastos y ventas (listado, resumen mensual, cobranza y por cobrar).
 2. `addPedido` hace `POST /pedidos/panel`, inserta el resultado en el estado y
    refresca stock y clientes para reflejar la reserva.
 3. `updatePedido` hace `PATCH /pedidos/panel/{id}` y refresca stock y clientes.
+   Si el cambio es a `Entregado`, además refresca las ventas para mostrar la
+   condición y el vencimiento.
 4. `deletePedido` hace `DELETE /pedidos/panel/{id}` y refresca stock y clientes.
 5. El cambio de estado se hace con `PATCH` y `{ estado }`. La página usa
    `updatePedido`; el helper `changeEstado` del contexto existe para el mismo
@@ -564,14 +610,36 @@ Al editar, suma los kilos ya reservados por el pedido al stock visible para no
 rechazar los mismos kilos. La validación definitiva sigue siendo la del backend.
 
 El formulario muestra un total estimado con el precio del catálogo, pero el
-total definitivo lo calcula el servidor.
+total definitivo lo calcula el servidor. El estado `Entregado` no se elige desde
+el formulario: se confirma con el modal de entrega. Si el pedido ya está
+entregado, el formulario muestra el estado como solo lectura y no lo reenvía.
 
-### 7.5 Experiencia de usuario
+### 7.5 Modal "Confirmar entrega"
+
+Se abre al arrastrar una tarjeta a `Entregado`, al usar el botón de estado o al
+elegir `Entregado` en el detalle. Pide:
+
+- **Condición de pago**: `Contado` o `Pagaré`. La opción pagaré queda
+  deshabilitada para clientes no B2B, con un aviso de que no tienen cuenta
+  corriente.
+- **Contado**: método de pago real (efectivo, transferencia, débito, Mercado
+  Pago, cheque u otro).
+- **Pagaré**: plazo de 30, 60 o 90 días y vencimiento calculado en pantalla.
+
+El modal muestra cliente, total y un resumen de la venta que se va a registrar.
+Al confirmar, `updatePedido` envía `estado`, `condicionPago` y `metodoPago` o
+`plazoDias`. Si el backend rechaza la operación, el toast muestra el mensaje (por
+ejemplo, el `409` al intentar revertir una entrega con venta vigente).
+
+### 7.6 Experiencia de usuario
 
 - Vista de tabla con filtros por estado, cliente y texto.
 - Vista Kanban con columnas `Pendiente`, `Listo` y `Entregado`.
-- Arrastrar una tarjeta cambia el estado.
-- Modal de detalle con ítems, kilos, precio/kg, subtotal y total.
+- Arrastrar una tarjeta cambia el estado; el destino `Entregado` abre el modal.
+- Columna "Cobro" en la tabla y badge en la tarjeta Kanban con la condición de
+  la venta (`Contado`, `Pagaré · vence …`, `Pagaré cobrado` o `Venta anulada`).
+- Modal de detalle con ítems, kilos, precio/kg, subtotal, total y bloque de
+  cobro.
 - Confirmación antes de eliminar.
 - Toasts de éxito/error y mensajes de stock insuficiente.
 
@@ -589,7 +657,7 @@ python -m pytest tests/modules/pedidos -q
 Resultado verificado en el árbol actual:
 
 ```text
-19 passed
+46 passed
 ```
 
 ### 8.2 Cobertura actual
@@ -599,15 +667,17 @@ Resultado verificado en el árbol actual:
 | CRUD de pedidos | Alta, búsqueda por idempotency key. |
 | Historial | Alta de registros de estado. |
 | Idempotencia | Misma petición devuelve el mismo pedido; generación de clave. |
-| Máquina de estados | Transiciones válidas e inválidas. |
+| Máquina de estados | Transiciones válidas e inválidas; reversión bloqueada por venta vigente. |
 | Eliminación | Solo `PENDIENTE`; devolución de stock. |
-| Cuenta corriente | Alta, reversión y cliente consumidor final. |
+| Entrega | Contado, pagaré B2B, pagaré a consumidor final rechazado, entrega duplicada. |
+| Atomicidad | Un fallo de la venta deja el pedido en `LISTO` y sin deuda. |
+| Cuenta corriente | Alta y reversión de la deuda delegadas en `ventas`. |
 | Historial de estados | Secuencia completa de cambios. |
+| Contratos HTTP | Validación de `condicionPago`, códigos `409`/`422` y auditoría con `cuenta_id`. |
 | Stock | Consulta de disponible y total por tipo de café. |
 
 ### 8.3 Brechas de cobertura
 
-- No hay `test_router.py`: los endpoints no tienen pruebas HTTP automatizadas.
 - `test_crear_pedido_con_stock_fifo` está marcado como pendiente (`pass`).
 - No hay pruebas de concurrencia ni de doble ejecución simultánea.
 - No hay pruebas de RBAC ni de aislamiento entre clientes.
@@ -688,9 +758,11 @@ pero deben tenerse presentes antes de llevar el módulo a producción.
 
 La intención de la spec es que alta, consumo de stock e historial ocurran en una
 sola transacción ACID. En la implementación actual, `crud` y `services` hacen
-`commit()` en varios puntos intermedios. Si falla un ítem después de crear el
-pedido o de consumir un lote, la respuesta puede ser un error pero quedar datos
-parciales. Es el punto más importante a corregir.
+`commit()` en varios puntos intermedios del alta y la edición. Si falla un ítem
+después de crear el pedido o de consumir un lote, la respuesta puede ser un error
+pero quedar datos parciales. La **entrega** sí es atómica: la venta se crea dentro
+de la misma transacción que el cambio de estado y un fallo deja el pedido en
+`LISTO`, sin venta y sin deuda. Es el punto más importante a corregir en el alta.
 
 ### 10.2 Rollback de stock no trazado por lote
 
@@ -745,18 +817,25 @@ El precio base de un producto tostado se toma de
 Es consistente con el catálogo actual, pero conviene renombrar o separar el
 precio de venta del costo del café verde.
 
-### 10.10 Modelos de pago y venta sin uso
+### 10.10 Tablas heredadas de pago y venta
 
-`Pago` y `Venta` están definidos, pero el flujo de pedidos no los crea. No hay
-registro formal de cobro, facturación ni conciliación.
+`Pago` y `Venta` de `pedidos/models.py` siguen mapeadas pero sin uso. La venta
+formal vive en el módulo `ventas` y se crea al confirmar la entrega. La eliminación
+de las tablas heredadas es un cambio aparte.
 
-### 10.11 Listados sin totales calculados
+### 10.11 Reversión de entrega con venta vigente
+
+`ENTREGADO → LISTO` responde `409` mientras exista una venta `CONFIRMADA` o
+`PENDIENTE_COBRO`. Para revertir la entrega hay que anular la venta primero; la
+reversión no repone stock porque el descuento ocurrió al crear el pedido.
+
+### 10.12 Listados sin totales calculados
 
 `PedidoListRead` declara `items_count` y `kilos_totales`, pero el ORM no los
 calcula: quedan en `0` por defecto. El panel usa el contrato `/panel`, que sí
 arma los ítems completos.
 
-### 10.12 Validación de stock por línea
+### 10.13 Validación de stock por línea
 
 La validación previa se hace ítem por ítem. Dos líneas del mismo producto pueden
 pasar cada una contra el total disponible y, juntas, superarlo. El consumo FIFO
@@ -764,7 +843,7 @@ posterior puede fallar y dejar el pedido parcialmente creado. Además, el schema
 no prohíbe enviar `tipo_de_cafe_id` y `blend_id` en el mismo detalle; en ese caso
 el consumo intentaría descontar stock de ambos orígenes.
 
-### 10.13 Resolución de usuario en el router
+### 10.14 Resolución de usuario en el router
 
 Varias rutas de `router.py` consultan directamente `Cuenta`, `Persona` y
 `Empleado` usando `service.db`. Según la arquitectura del proyecto, el router
@@ -790,10 +869,11 @@ Orden sugerido, de mayor a menor impacto:
    `GET /pedidos/` y devolver un sobre con `total`, `page` y `size`.
 6. **Auditoría de usuario**: persistir `usuario_id` en cada transición.
 7. **Restringir edición de ítems** a pedidos `PENDIENTE`.
-8. **Pruebas HTTP y FIFO reales**: `test_router.py`, doble ejecución,
-   concurrencia y edición multi-lote.
-9. **Integrar pago/venta**: crear `Pago` y `Venta` al confirmar la entrega.
-10. **Validar límite de crédito** antes de entregar a un cliente B2B.
+8. **Pruebas de FIFO reales**: doble ejecución, concurrencia y edición
+   multi-lote (los endpoints ya tienen `test_router.py`).
+9. **Validar límite de crédito** antes de entregar a un cliente B2B.
+10. **Cobros parciales de pagarés** y recordatorios de vencimiento (hoy el
+    pagaré se cobra entero).
 
 ---
 
@@ -807,7 +887,9 @@ Orden sugerido, de mayor a menor impacto:
 - `backend/app/modules/pedidos/services.py`
 - `backend/app/modules/pedidos/router.py`
 - `backend/tests/modules/pedidos/test_crud.py`
+- `backend/tests/modules/pedidos/test_schemas.py`
 - `backend/tests/modules/pedidos/test_services.py`
+- `backend/tests/modules/pedidos/test_router.py`
 - `backend/tests/conftest.py`
 - `frontend/src/pages/Pedidos.jsx`
 - `frontend/src/components/forms/PedidoForm.jsx`
@@ -821,6 +903,8 @@ Orden sugerido, de mayor a menor impacto:
 - `openspec/changes/002pedidos/tasks.md`
 - `openspec/changes/002pedidos/specs/pedidos/spec.md`
 - `openspec/specs/pedidos/spec.md`
+- `openspec/changes/005-ventas-integracion-metodos-de-pagos/`
+- `docs/feature-ventas.md`
 
 > `tasks.md` conserva el checklist de planificación original
 > (`status: in_progress`). La implementación efectiva se refleja en este

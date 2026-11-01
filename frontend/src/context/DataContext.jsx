@@ -4,6 +4,13 @@ import { api } from '../services/api'
 
 const DataContext = createContext(null)
 
+// Estado inicial de "Por cobrar" mientras la API no responde o falla.
+const POR_COBRAR_VACIO = {
+  items: [],
+  total_por_cobrar: 0,
+  cantidad_vencidas: 0,
+}
+
 function kilosDeStock(stockItem) {
   if (!stockItem?.bolsas || !Array.isArray(stockItem.bolsas)) return 0
   return stockItem.bolsas.reduce((sum, bolsa) => sum + (bolsa.kilos || 0), 0)
@@ -15,6 +22,10 @@ export function DataProvider({ children }) {
   const [clientes, setClientes] = useState([])
   const [pedidos, setPedidos] = useState([])
   const [gastos, setGastos] = useState([])
+  const [ventas, setVentas] = useState([])
+  const [resumenVentasMensual, setResumenVentasMensual] = useState([])
+  const [cobranzaMensual, setCobranzaMensual] = useState([])
+  const [porCobrar, setPorCobrar] = useState(POR_COBRAR_VACIO)
   const [isLoaded, setIsLoaded] = useState(false)
   const [loading, setLoading] = useState({})
   const [errors, setErrors] = useState({})
@@ -28,6 +39,10 @@ export function DataProvider({ children }) {
       setClientes([])
       setPedidos([])
       setGastos([])
+      setVentas([])
+      setResumenVentasMensual([])
+      setCobranzaMensual([])
+      setPorCobrar(POR_COBRAR_VACIO)
       setErrors({})
       setIsLoaded(false)
       return () => {
@@ -55,12 +70,54 @@ export function DataProvider({ children }) {
         : api.getClientes()
       const gastosPromise = esCliente ? Promise.resolve([]) : api.getGastos()
 
+      // Las ventas alimentan Contabilidad. Si la base no tiene la migración
+      // 003_ventas, el endpoint falla: se aísla para que el resto del panel
+      // siga cargando y Contabilidad muestre un aviso.
+      let errorContabilidad = null
+      const ventasPromise = esCliente
+        ? Promise.resolve([])
+        : api.getVentas({ limit: 100 }).catch(error => {
+          errorContabilidad = error.message
+          return []
+        })
+      const resumenVentasPromise = esCliente
+        ? Promise.resolve([])
+        : api.getResumenMensualVentas().catch(error => {
+          errorContabilidad = errorContabilidad || error.message
+          return []
+        })
+      const cobranzaPromise = esCliente
+        ? Promise.resolve([])
+        : api.getCobranzaMensualVentas().catch(error => {
+          errorContabilidad = errorContabilidad || error.message
+          return []
+        })
+      const porCobrarPromise = esCliente
+        ? Promise.resolve(POR_COBRAR_VACIO)
+        : api.getPorCobrarVentas().catch(error => {
+          errorContabilidad = errorContabilidad || error.message
+          return POR_COBRAR_VACIO
+        })
+
       try {
-        const [stockRes, clientesRes, pedidosRes, gastosRes] = await Promise.all([
+        const [
+          stockRes,
+          clientesRes,
+          pedidosRes,
+          gastosRes,
+          ventasRes,
+          resumenVentasRes,
+          cobranzaRes,
+          porCobrarRes,
+        ] = await Promise.all([
           api.getStock(),
           clientesPromise,
           pedidosPromise,
           gastosPromise,
+          ventasPromise,
+          resumenVentasPromise,
+          cobranzaPromise,
+          porCobrarPromise,
         ])
 
         if (!activo) return
@@ -68,6 +125,13 @@ export function DataProvider({ children }) {
         setClientes(clientesRes || [])
         setPedidos(pedidosRes || [])
         setGastos(gastosRes || [])
+        setVentas(ventasRes || [])
+        setResumenVentasMensual(resumenVentasRes || [])
+        setCobranzaMensual(cobranzaRes || [])
+        setPorCobrar(porCobrarRes || POR_COBRAR_VACIO)
+        if (errorContabilidad) {
+          setErrors(prev => ({ ...prev, contabilidad: errorContabilidad }))
+        }
       } catch (error) {
         if (!activo) return
         console.error('Error cargando datos del panel:', error)
@@ -123,6 +187,27 @@ export function DataProvider({ children }) {
   const refrescarStockYClientes = useCallback(async () => {
     await Promise.all([refrescarStockSilencioso(), refrescarClientesSilencioso()])
   }, [refrescarStockSilencioso, refrescarClientesSilencioso])
+
+  // --- Ventas (contabilidad) ---
+  const refrescarVentas = useCallback(async () => {
+    if (user?.role === 'cliente') return
+    try {
+      const [ventasRes, resumenRes, cobranzaRes, porCobrarRes] = await Promise.all([
+        api.getVentas({ limit: 100 }),
+        api.getResumenMensualVentas(),
+        api.getCobranzaMensualVentas(),
+        api.getPorCobrarVentas(),
+      ])
+      setVentas(ventasRes || [])
+      setResumenVentasMensual(resumenRes || [])
+      setCobranzaMensual(cobranzaRes || [])
+      setPorCobrar(porCobrarRes || POR_COBRAR_VACIO)
+      setErrors(prev => ({ ...prev, contabilidad: null }))
+    } catch (error) {
+      setErrors(prev => ({ ...prev, contabilidad: error.message }))
+      throw error
+    }
+  }, [user?.role])
 
   // --- Stock ---
   const addStock = withLoading('stock', async (item) => {
@@ -222,6 +307,10 @@ export function DataProvider({ children }) {
     const actualizado = await api.updatePedido(id, cambios)
     setPedidos(prev => prev.map(item => item.id === id ? actualizado : item))
     await refrescarStockYClientes()
+    if (cambios?.estado === 'Entregado') {
+      // La entrega crea la venta: se refresca para mostrar condición y vencimiento.
+      await refrescarVentas().catch(() => {})
+    }
     return actualizado
   })
 
@@ -235,6 +324,9 @@ export function DataProvider({ children }) {
     const actualizado = await api.updatePedido(id, { estado: nuevoEstado })
     setPedidos(prev => prev.map(item => item.id === id ? actualizado : item))
     await refrescarClientesSilencioso()
+    if (nuevoEstado === 'Entregado') {
+      await refrescarVentas().catch(() => {})
+    }
     return actualizado
   })
 
@@ -254,6 +346,21 @@ export function DataProvider({ children }) {
   const deleteGasto = withLoading('gastos', async (id) => {
     await api.deleteGasto(id)
     setGastos(prev => prev.filter(item => item.id !== id))
+  })
+
+  // --- Ventas (contabilidad) ---
+  const cobrarVenta = withLoading('ventas', async (id, datos) => {
+    const venta = await api.cobrarVenta(id, datos)
+    await refrescarVentas()
+    await refrescarClientesSilencioso()
+    return venta
+  })
+
+  const anularVenta = withLoading('ventas', async (id, motivo) => {
+    const anulada = await api.anularVenta(id, motivo)
+    await refrescarVentas()
+    await refrescarClientesSilencioso()
+    return anulada
   })
 
   // --- Consultas derivadas ---
@@ -297,12 +404,9 @@ export function DataProvider({ children }) {
     const ventasPorMes = {}
     const gastosPorMes = {}
 
-    pedidos
-      .filter(pedido => pedido.estado === 'Entregado')
-      .forEach(pedido => {
-        const mes = String(pedido.fecha).substring(0, 7)
-        ventasPorMes[mes] = (ventasPorMes[mes] || 0) + (pedido.total || 0)
-      })
+    resumenVentasMensual.forEach(fila => {
+      ventasPorMes[fila.mes] = Number(fila.total_facturado) || 0
+    })
 
     gastos.forEach(gasto => {
       const mes = String(gasto.fecha).substring(0, 7)
@@ -323,7 +427,7 @@ export function DataProvider({ children }) {
         gastosTotales: gastosPorMes[mes] || 0,
         gananciaNeta: (ventasPorMes[mes] || 0) - (gastosPorMes[mes] || 0),
       }))
-  }, [pedidos, gastos])
+  }, [resumenVentasMensual, gastos])
 
   const getTotalesGenerales = useCallback(() => {
     const contabilidad = getContabilidadMensual()
@@ -382,6 +486,15 @@ export function DataProvider({ children }) {
     addGasto,
     updateGasto,
     deleteGasto,
+
+    // Ventas
+    ventas,
+    resumenVentasMensual,
+    cobranzaMensual,
+    porCobrar,
+    refrescarVentas,
+    cobrarVenta,
+    anularVenta,
 
     // Contabilidad
     getContabilidadMensual,

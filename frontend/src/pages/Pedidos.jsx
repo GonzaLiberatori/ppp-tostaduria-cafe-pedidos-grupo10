@@ -8,13 +8,32 @@ import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
 import Select from '../components/ui/Select'
+import Modal from '../components/ui/Modal'
 import { formatearMoneda, formatearFecha, formatearKilos } from '../utils/formatters'
 import { ShoppingCart, Plus, Filter, Trash2, Edit, Eye, Truck, CheckCircle, Clock } from 'lucide-react'
+
+// Métodos admitidos al cobrar una entrega al contado. Crédito queda afuera
+// porque en el panel representa un pagaré, no un medio de cobro.
+const METODOS_PAGO_CONTADO = [
+  { value: 'EFECTIVO', label: 'Efectivo' },
+  { value: 'TRANSFERENCIA', label: 'Transferencia' },
+  { value: 'DEBITO', label: 'Débito' },
+  { value: 'MERCADO_PAGO', label: 'Mercado Pago' },
+  { value: 'CHEQUE', label: 'Cheque' },
+  { value: 'OTRO', label: 'Otro' },
+]
+
+const PLAZOS_PAGARE = [
+  { value: '30', label: '30 días' },
+  { value: '60', label: '60 días' },
+  { value: '90', label: '90 días' },
+]
 
 export default function Pedidos() {
   const { 
     pedidos, 
     clientes, 
+    ventas,
     addPedido, 
     updatePedido, 
     deletePedido,
@@ -28,6 +47,11 @@ export default function Pedidos() {
   const [viewDetail, setViewDetail] = useState(null)
   const [filters, setFilters] = useState({ estado: '', search: '', clienteId: '' })
   const [kanbanView, setKanbanView] = useState(false)
+  const [entrega, setEntrega] = useState(null)
+  const [condicionPago, setCondicionPago] = useState('CONTADO')
+  const [metodoPago, setMetodoPago] = useState('EFECTIVO')
+  const [plazoDias, setPlazoDias] = useState('30')
+  const [entregando, setEntregando] = useState(false)
 
   const pedidosPendientes = getPedidosByEstado('Pendiente')
   const pedidosListos = getPedidosByEstado('Listo')
@@ -87,7 +111,39 @@ export default function Pedidos() {
     }
   }
 
+  const clienteDePedido = (pedido) => (
+    clientes.find(c => String(c.id) === String(pedido?.clienteId))
+  )
+
+  const esClienteB2B = (cliente) => cliente?.tipo === 'B2B'
+
+  // Devuelve la venta vigente del pedido; si solo hay una anulada, la devuelve
+  // igual para poder informar que la entrega quedó sin venta.
+  const ventaDePedido = (pedidoId) => {
+    const delPedido = ventas.filter(v => String(v.pedido_id) === String(pedidoId))
+    return delPedido.find(v => v.estado !== 'ANULADA') || delPedido[0] || null
+  }
+
+  const abrirEntrega = (pedido) => {
+    setEntrega(pedido)
+    setCondicionPago('CONTADO')
+    setMetodoPago('EFECTIVO')
+    setPlazoDias('30')
+  }
+
+  const cerrarEntrega = () => {
+    if (entregando) return
+    setEntrega(null)
+  }
+
   const changeEstado = async (pedido, nuevoEstado) => {
+    // La entrega crea la venta y necesita la condición de pago: se pide en un
+    // modal en lugar de mandar el estado a ciegas.
+    if (nuevoEstado === 'Entregado') {
+      abrirEntrega(pedido)
+      return
+    }
+
     try {
       await updatePedido(pedido.id, { estado: nuevoEstado })
       success(`Pedido actualizado a ${nuevoEstado}`)
@@ -95,6 +151,37 @@ export default function Pedidos() {
       toastError(err.message || 'No se pudo cambiar el estado')
     }
   }
+
+  const confirmarEntrega = async () => {
+    if (!entrega) return
+
+    const esB2B = esClienteB2B(clienteDePedido(entrega))
+    const condicion = esB2B ? condicionPago : 'CONTADO'
+    const cambios = { estado: 'Entregado', condicionPago: condicion }
+
+    if (condicion === 'CONTADO') {
+      cambios.metodoPago = metodoPago
+    } else {
+      cambios.plazoDias = Number(plazoDias)
+    }
+
+    setEntregando(true)
+    try {
+      await updatePedido(entrega.id, cambios)
+      success(
+        condicion === 'CONTADO'
+          ? 'Pedido entregado con venta al contado'
+          : `Pedido entregado con pagaré a ${plazoDias} días`,
+      )
+      setEntrega(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo confirmar la entrega')
+    } finally {
+      setEntregando(false)
+    }
+  }
+
+  const ventaDetalle = viewDetail ? ventaDePedido(viewDetail.id) : null
 
   const estadoIcon = {
     Pendiente: Clock,
@@ -108,6 +195,23 @@ export default function Pedidos() {
     Entregado: 'success',
   }
 
+  const cobroDeVenta = (venta) => {
+    if (!venta) return null
+    if (venta.estado === 'ANULADA') {
+      return { variant: 'danger', label: 'Venta anulada' }
+    }
+    if (venta.estado === 'PENDIENTE_COBRO') {
+      return {
+        variant: 'warning',
+        label: `Pagaré · vence ${formatearFecha(venta.fecha_vencimiento)}`,
+      }
+    }
+    return {
+      variant: 'success',
+      label: venta.fecha_vencimiento ? 'Pagaré cobrado' : 'Contado',
+    }
+  }
+
   const columns = [
     { key: 'fecha', header: 'Fecha', width: '100px', render: (v) => formatearFecha(v) },
     { key: 'cliente', header: 'Cliente', render: (_, row) => {
@@ -115,6 +219,12 @@ export default function Pedidos() {
       return cliente?.nombre || 'Desconocido'
     }},
     { key: 'estado', header: 'Estado', width: '110px', render: (v) => <Badge variant={estadoColor[v]}>{v}</Badge> },
+    { key: 'cobro', header: 'Cobro', width: '170px', render: (_, row) => {
+      const cobro = cobroDeVenta(ventaDePedido(row.id))
+      return cobro
+        ? <Badge variant={cobro.variant}>{cobro.label}</Badge>
+        : <span className="text-[var(--color-text-muted)]">-</span>
+    }},
     { key: 'items', header: 'Items', render: (v) => `${v.length} producto${v.length !== 1 ? 's' : ''}` },
     { key: 'kilos', header: 'Kilos', render: (_, row) => formatearKilos(row.items.reduce((sum, i) => sum + i.kilos, 0)), className: 'font-mono tabular-nums' },
     { key: 'total', header: 'Total', render: (v) => formatearMoneda(v), className: 'font-mono tabular-nums font-medium text-right' },
@@ -241,6 +351,15 @@ export default function Pedidos() {
                             <span>{pedido.items.length} items · {formatearKilos(pedido.items.reduce((s, i) => s + i.kilos, 0))}</span>
                             <span className="font-medium text-[var(--color-text-primary)]">{formatearMoneda(pedido.total)}</span>
                           </div>
+                          {(() => {
+                            const cobro = cobroDeVenta(ventaDePedido(pedido.id))
+                            if (!cobro) return null
+                            return (
+                              <div className="mt-2">
+                                <Badge variant={cobro.variant} className="text-[10px]">{cobro.label}</Badge>
+                              </div>
+                            )
+                          })()}
                           <div className="flex gap-1 mt-2">
                             {ESTADOS_PEDIDO.filter(e => e.value !== pedido.estado).map(e => (
                               <button
@@ -314,6 +433,98 @@ export default function Pedidos() {
         onSubmit={handleSubmit}
       />
 
+      <Modal
+        isOpen={Boolean(entrega)}
+        onClose={cerrarEntrega}
+        title="Confirmar entrega"
+        size="md"
+        confirmAction={confirmarEntrega}
+        confirmText="Confirmar entrega"
+        loading={entregando}
+      >
+        {entrega && (() => {
+          const cliente = clienteDePedido(entrega)
+          const esB2B = esClienteB2B(cliente)
+          const condicion = esB2B ? condicionPago : 'CONTADO'
+          const vencimiento = condicion === 'PAGARE'
+            ? new Date(Date.now() + Number(plazoDias) * 24 * 60 * 60 * 1000)
+            : null
+
+          return (
+            <div className="space-y-4">
+              <div className="grid gap-2 sm:grid-cols-2 text-sm">
+                <div>
+                  <p className="text-[var(--color-text-muted)]">Cliente</p>
+                  <p className="font-medium">{cliente?.nombre || 'Desconocido'}</p>
+                </div>
+                <div>
+                  <p className="text-[var(--color-text-muted)]">Total del pedido</p>
+                  <p className="font-medium font-mono tabular-nums">{formatearMoneda(entrega.total)}</p>
+                </div>
+              </div>
+
+              <Select
+                label="Condición de pago"
+                value={condicion}
+                onChange={e => setCondicionPago(e.target.value)}
+                options={[
+                  { value: 'CONTADO', label: 'Contado' },
+                  {
+                    value: 'PAGARE',
+                    label: esB2B
+                      ? 'Pagaré (cuenta corriente)'
+                      : 'Pagaré (solo mayoristas)',
+                    disabled: !esB2B,
+                  },
+                ]}
+              />
+
+              {condicion === 'CONTADO' ? (
+                <Select
+                  label="Método de pago"
+                  value={metodoPago}
+                  onChange={e => setMetodoPago(e.target.value)}
+                  options={METODOS_PAGO_CONTADO}
+                />
+              ) : (
+                <Select
+                  label="Plazo del pagaré"
+                  value={plazoDias}
+                  onChange={e => setPlazoDias(e.target.value)}
+                  options={PLAZOS_PAGARE}
+                />
+              )}
+
+              {!esB2B && (
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  {cliente?.nombre || 'El cliente'} es minorista: no tiene cuenta
+                  corriente, así que la entrega solo puede registrarse al contado.
+                </p>
+              )}
+
+              <div className="bg-coffee-500/5 border border-coffee-500/20 rounded-lg p-4 text-sm">
+                {condicion === 'CONTADO' ? (
+                  <p>
+                    Se registrará una venta <strong>al contado</strong> por{' '}
+                    <strong>{formatearMoneda(entrega.total)}</strong> con el método{' '}
+                    <strong>
+                      {METODOS_PAGO_CONTADO.find(m => m.value === metodoPago)?.label || metodoPago}
+                    </strong>.
+                  </p>
+                ) : (
+                  <p>
+                    Se registrará una venta <strong>a pagaré</strong> por{' '}
+                    <strong>{formatearMoneda(entrega.total)}</strong>, con vencimiento
+                    el <strong>{formatearFecha(vencimiento)}</strong>. La deuda se
+                    sumará a la cuenta corriente del cliente.
+                  </p>
+                )}
+              </div>
+            </div>
+          )
+        })()}
+      </Modal>
+
       {viewDetail && (
         <div className="modal-overlay" onClick={() => setViewDetail(null)}>
           <div className="modal-content max-w-2xl" onClick={e => e.stopPropagation()}>
@@ -346,6 +557,47 @@ export default function Pedidos() {
                 <div>
                   <p className="text-sm text-[var(--color-text-muted)]">Estado</p>
                   <p className="font-medium"><Badge variant={estadoColor[viewDetail.estado]}>{viewDetail.estado}</Badge></p>
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-sm text-[var(--color-text-muted)]">Cobro</p>
+                  {ventaDetalle ? (
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <Badge
+                        variant={
+                          ventaDetalle.estado === 'PENDIENTE_COBRO'
+                            ? 'warning'
+                            : ventaDetalle.estado === 'ANULADA'
+                              ? 'danger'
+                              : 'success'
+                        }
+                      >
+                        {ventaDetalle.estado === 'ANULADA'
+                          ? 'Venta anulada'
+                          : ventaDetalle.fecha_vencimiento
+                            ? 'Pagaré'
+                            : 'Contado'}
+                      </Badge>
+                      <span className="text-sm text-[var(--color-text-secondary)]">
+                        {ventaDetalle.numero_comprobante || 'Sin comprobante'}
+                      </span>
+                      {ventaDetalle.estado === 'PENDIENTE_COBRO' && (
+                        <span className="text-sm text-amber-600 dark:text-amber-400">
+                          Pendiente de cobro · vence {formatearFecha(ventaDetalle.fecha_vencimiento)}
+                        </span>
+                      )}
+                      {ventaDetalle.estado === 'CONFIRMADA' && (
+                        <span className="text-sm text-[var(--color-text-muted)]">
+                          Cobrado{ventaDetalle.cobrada_en ? ` el ${formatearFecha(ventaDetalle.cobrada_en)}` : ''}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="font-medium text-[var(--color-text-muted)]">
+                      {viewDetail.estado === 'Entregado'
+                        ? 'Sin venta registrada (pedido heredado)'
+                        : 'Se registra al confirmar la entrega'}
+                    </p>
+                  )}
                 </div>
                 <div className="sm:col-span-2">
                   <p className="text-sm text-[var(--color-text-muted)]">Observaciones</p>

@@ -20,6 +20,9 @@ build/
 Thumbs.db
 .atl
 
+# === Base de datos local ===
+backend/db_ventas.sqlite
+
 # === Logs (APScheduler / backend) ===
 *.log
 logs/
