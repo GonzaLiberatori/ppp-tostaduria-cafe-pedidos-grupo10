@@ -95,8 +95,7 @@ class OrdenTuesteBase(BaseModel):
     fecha_tueste: datetime
     kg_gastados: Decimal
     kg_obtenidos: Decimal
-    tipo_de_cafe_id: Optional[int] = None
-    perfil_de_tostado_id: Optional[int] = None
+    perfil_de_tostado_id: int
 
 
 class OrdenTuesteCreate(OrdenTuesteBase):

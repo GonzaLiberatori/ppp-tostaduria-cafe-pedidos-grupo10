@@ -6,7 +6,6 @@ import {
   ShoppingCart, 
   Calculator, 
   Coffee, 
-  Flame,
   LogOut,
   User,
   ChevronDown
@@ -16,7 +15,6 @@ import { useAuth } from '../../context/AuthContext'
 
 const navigation = [
   { name: 'Stock', href: '/stock', icon: Package, roles: ['admin', 'empleado'] },
-  { name: 'Tueste', href: '/tueste', icon: Flame, roles: ['admin', 'empleado'] },
   { name: 'Clientes', href: '/clientes', icon: Users, roles: ['admin', 'empleado', 'vendedor'] },
   { name: 'Pedidos', href: '/pedidos', icon: ShoppingCart, roles: ['admin', 'empleado', 'vendedor'] },
   { name: 'Contabilidad', href: '/contabilidad', icon: Calculator, roles: ['admin'] },

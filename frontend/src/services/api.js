@@ -135,15 +135,6 @@ export const api = {
   updateCliente: (id, data) => request(`/clientes/${id}`, { method: 'PATCH', body: data }),
   deleteCliente: (id) => request(`/clientes/${id}`, { method: 'DELETE' }),
 
-  // Inventario (endpoints canónicos usados por tueste)
-  getTiposDeCafe: () => request('/inventario/tipos-de-cafe'),
-  getLotes: (params = {}) => request(conQuery('/inventario/lotes', params)),
-  getLote: (id) => request(`/inventario/lotes/${id}`),
-
-  // Producción
-  getTuestes: () => request('/produccion/tuestes'),
-  createTueste: (data) => request('/produccion/tuestes', { method: 'POST', body: data }),
-
   // Inventario (contrato plano del panel)
   getStock: () => request('/inventario/stock'),
   getStockItem: (id) => request(`/inventario/stock/${id}`),

@@ -8,21 +8,14 @@ desconocidos) las hace Pydantic antes de llegar acá, así que este módulo no l
 repite.
 """
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
 from decimal import Decimal
 import re
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app.modules.inventario import crud
-from app.modules.inventario.models import (
-    Blend,
-    Lote,
-    LoteEstado,
-    LoteTipo,
-    TipoDeCafe,
-)
+from app.modules.inventario.models import Blend, Lote, LoteEstado, LoteTipo, TipoDeCafe
 from app.modules.inventario.schemas import (
     BlendCreate,
     BlendRead,
@@ -116,38 +109,6 @@ class KgDisponiblesExcedeKgReales(Exception):
         super().__init__(
             f"Los kg disponibles ({kg_disponibles}) no pueden superar los kg reales ({kg_reales})."
         )
-
-
-class StockVerdeInsuficiente(Exception):
-    """No hay suficiente café verde abierto para cubrir el consumo solicitado."""
-
-    def __init__(
-        self, tipo_de_cafe_id: int, solicitado: Decimal, disponible: Decimal
-    ) -> None:
-        self.tipo_de_cafe_id = tipo_de_cafe_id
-        self.solicitado = solicitado
-        self.disponible = disponible
-        super().__init__(
-            f"Stock verde insuficiente para el tipo de café {tipo_de_cafe_id}: "
-            f"se solicitan {solicitado} kg y hay {disponible} kg disponibles."
-        )
-
-
-@dataclass(frozen=True)
-class ConsumoDeLoteVerde:
-    """Consumo aplicado a un lote verde concreto durante una operación."""
-
-    lote_id: int
-    kg_consumidos: Decimal
-
-
-@dataclass(frozen=True)
-class LoteTostadoCreado:
-    """Datos mínimos del lote tostado creado por una orden de tueste."""
-
-    id: int
-    tipo_de_cafe_id: int
-    kg_reales: Decimal
 
 
 def crear_tipo_de_cafe(db: Session, datos: TipoDeCafeCreate) -> TipoDeCafeRead:
@@ -316,12 +277,12 @@ def eliminar_blend(db: Session, blend_id: int) -> None:
 # ---------------------------------------------------------------------------
 # Lote
 # ---------------------------------------------------------------------------
-def _crear_lote_sin_commit(db: Session, datos: LoteCreate) -> Lote:
-    """Crea un lote y lo deja en la transacción abierta, sin confirmarla.
+def crear_lote(db: Session, datos: LoteCreate) -> LoteRead:
+    """Da de alta un lote en una sola transacción.
 
     El schema ya garantizó que viene exactamente un origen; acá solo falta
-    comprobar que ese registro exista. La derivación de ``kg_disponibles``
-    también vive acá para que no haya dos fuentes de verdad del mismo número.
+    comprobar que ese registro exista. Y de paso se deriva el campo que el
+    contrato no pide: `kg_disponibles` arranca igual que `kg_reales`.
     """
     if datos.tipo_de_cafe_id is not None:
         entidad_origen, origen_id = TipoDeCafe, datos.tipo_de_cafe_id
@@ -331,100 +292,14 @@ def _crear_lote_sin_commit(db: Session, datos: LoteCreate) -> Lote:
     if not crud.existe_registro(db, entidad_origen, origen_id):
         raise OrigenDeLoteNoEncontrado(entidad_origen.__name__, origen_id)
 
-    return crud.crear_lote(db, datos, kg_disponibles=datos.kg_reales)
-
-
-def crear_lote(db: Session, datos: LoteCreate) -> LoteRead:
-    """Da de alta un lote en una sola transacción."""
     try:
-        lote = _crear_lote_sin_commit(db, datos)
+        lote = crud.crear_lote(db, datos, kg_disponibles=datos.kg_reales)
         db.commit()
     except Exception:
         db.rollback()
         raise
 
     return LoteRead.model_validate(lote)
-
-
-def consumir_stock_verde_fifo(
-    db: Session, tipo_de_cafe_id: int, kg: Decimal
-) -> list[ConsumoDeLoteVerde]:
-    """Descuenta café verde de los lotes abiertos en orden FIFO.
-
-    No hace commit: la transacción completa pertenece a quien orquesta la
-    operación. Si el stock no alcanza, lanza ``StockVerdeInsuficiente`` antes
-    de modificar cualquier lote.
-    """
-    if kg <= 0:
-        raise ValueError("La cantidad de café verde a consumir debe ser mayor que cero.")
-
-    if not crud.existe_registro(db, TipoDeCafe, tipo_de_cafe_id):
-        raise TipoDeCafeNoEncontrado(tipo_de_cafe_id)
-
-    lotes = crud.listar_lotes_verdes_fifo(db, tipo_de_cafe_id)
-    disponible = sum(
-        (Decimal(lote.kg_disponibles) for lote in lotes), Decimal("0")
-    )
-
-    if disponible < kg:
-        raise StockVerdeInsuficiente(tipo_de_cafe_id, kg, disponible)
-
-    consumo: list[ConsumoDeLoteVerde] = []
-    restante = kg
-
-    for lote in lotes:
-        if restante <= 0:
-            break
-
-        consumido = min(Decimal(lote.kg_disponibles), restante)
-        nuevo_disponible = Decimal(lote.kg_disponibles) - consumido
-        crud.actualizar_kg_disponibles(db, lote, nuevo_disponible)
-
-        if nuevo_disponible == 0:
-            crud.actualizar_estado(db, lote, LoteEstado.CERRADO)
-
-        consumo.append(
-            ConsumoDeLoteVerde(lote_id=lote.id, kg_consumidos=consumido)
-        )
-        restante -= consumido
-
-    return consumo
-
-
-def crear_lote_tostado_de_tueste(
-    db: Session,
-    *,
-    tipo_de_cafe_id: int,
-    kg_reales: Decimal,
-    orden_tueste_id: int,
-    fecha_vencimiento: datetime,
-    humedad: Decimal,
-    ubicacion_fisica: str,
-    observaciones: str | None = None,
-) -> LoteTostadoCreado:
-    """Crea el lote TOSTADO que sale de una orden de tueste, sin commit.
-
-    La orden ya debe existir y estar flusheada para que su ``id`` esté
-    disponible. El lote nace abierto y con todos sus kilos disponibles.
-    """
-    datos = LoteCreate(
-        tipo=LoteTipo.TOSTADO,
-        estado=LoteEstado.ABIERTO,
-        fecha_vencimiento=fecha_vencimiento,
-        humedad=humedad,
-        kg_reales=kg_reales,
-        ubicacion_fisica=ubicacion_fisica,
-        observaciones=observaciones,
-        tipo_de_cafe_id=tipo_de_cafe_id,
-        orden_tueste_id=orden_tueste_id,
-    )
-    lote = _crear_lote_sin_commit(db, datos)
-
-    return LoteTostadoCreado(
-        id=lote.id,
-        tipo_de_cafe_id=tipo_de_cafe_id,
-        kg_reales=kg_reales,
-    )
 
 
 def obtener_lote(db: Session, lote_id: int) -> LoteRead:
