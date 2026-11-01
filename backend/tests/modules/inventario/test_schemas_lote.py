@@ -34,8 +34,13 @@ OPCIONALES: tuple[str, ...] = ("observaciones", "blend_id", "orden_tueste_id")
 
 PROHIBIDAS_EN_UPDATE: tuple[str, ...] = ("tipo", "tipo_de_cafe_id", "blend_id", "orden_tueste_id")
 
-# `LoteRead` sí expone `kg_disponibles`, que el alta ya no pide.
-PAYLOAD_LECTURA: dict[str, Any] = {**PAYLOAD_BASE, "kg_disponibles": "59.80"}
+# `LoteRead` sí expone `kg_disponibles`, que el alta ya no pide, y
+# `fecha_ingreso`, que asigna el servidor al crear el lote.
+PAYLOAD_LECTURA: dict[str, Any] = {
+    **PAYLOAD_BASE,
+    "kg_disponibles": "59.80",
+    "fecha_ingreso": "2026-01-15T08:00:00",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +254,7 @@ def test_read_se_construye_desde_el_orm_sin_adaptador():
         id=3,
         tipo=LoteTipo.VERDE,
         estado=LoteEstado.ABIERTO,
+        fecha_ingreso=datetime(2026, 1, 15, 8, 0),
         fecha_vencimiento=datetime(2026, 12, 31, 8, 0),
         humedad=Decimal("11.50"),
         kg_disponibles=Decimal("60.00"),

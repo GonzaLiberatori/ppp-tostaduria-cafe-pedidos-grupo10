@@ -4,10 +4,11 @@ import { formatearMoneda, formatearKilos, formatearFecha } from '../../utils/for
 import { ShoppingCart, List, User, Clock, Package } from 'lucide-react'
 
 export default function InicioCliente() {
-  const { pedidos, getPedidosByCliente, getTotalKilosStock } = useData()
+  const { getPedidosByCliente, getTotalKilosStock, getClienteById } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
+  const cliente = clienteId ? getClienteById(clienteId) : null
   const misPedidos = clienteId ? getPedidosByCliente(clienteId) : []
   const pedidosPendientes = misPedidos.filter(p => p.estado === 'Pendiente')
   const pedidosEntregados = misPedidos.filter(p => p.estado === 'Entregado')
@@ -19,7 +20,7 @@ export default function InicioCliente() {
     .reduce((sum, p) => sum + p.items.reduce((s, i) => s + i.kilos, 0), 0)
 
   const totalTostado = getTotalKilosStock('tostado')
-  const totalVerde = getTotalKilosStock('verde')
+  const saldoPendiente = cliente?.montoDeuda || 0
 
   return (
     <div className="space-y-6">
@@ -82,11 +83,15 @@ export default function InicioCliente() {
         <div className="card p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="font-semibold text-[var(--color-text-primary)]">Café verde disponible</h3>
-              <p className="text-sm text-[var(--color-text-muted)]">Materia prima para tueste</p>
+              <h3 className="font-semibold text-[var(--color-text-primary)]">Saldo de cuenta</h3>
+              <p className="text-sm text-[var(--color-text-muted)]">
+                {cliente?.tieneDeuda ? 'Deuda pendiente' : 'Sin deudas'}
+              </p>
             </div>
             <div className="text-right">
-              <p className="text-2xl font-bold text-[var(--color-text-primary)]">{formatearKilos(totalVerde)}</p>
+              <p className="text-2xl font-bold text-[var(--color-text-primary)]">
+                {formatearMoneda(saldoPendiente)}
+              </p>
             </div>
           </div>
         </div>
@@ -115,7 +120,7 @@ export default function InicioCliente() {
                     <th scope="col" className="text-right">Kilos</th>
                     <th scope="col" className="text-right">Total</th>
                     <th scope="col">Estado</th>
-                    <th scope="col">Medio de pago</th>
+                    <th scope="col">Medio de contacto</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -129,7 +134,7 @@ export default function InicioCliente() {
                         {formatearMoneda(pedido.total)}
                       </td>
                       <td>{pedido.estado}</td>
-                      <td>{pedido.medioPago || '—'}</td>
+                      <td>{pedido.medioContacto || '—'}</td>
                     </tr>
                   ))}
                 </tbody>

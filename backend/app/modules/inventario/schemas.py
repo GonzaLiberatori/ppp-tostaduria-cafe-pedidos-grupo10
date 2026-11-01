@@ -241,6 +241,11 @@ class LoteCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    codigo_lote: Optional[str] = Field(
+        default=None,
+        max_length=_LONGITUD_NOMBRE,
+        description="Código legible del lote (por ejemplo, el que figura en la bolsa).",
+    )
     tipo: LoteTipo = Field(description="Naturaleza del lote, VERDE o TOSTADO.")
     estado: LoteEstado = Field(description="Estado del lote, CERRADO o ABIERTO.")
     fecha_vencimiento: datetime = Field(description="Fecha y hora de vencimiento del lote.")
@@ -289,6 +294,11 @@ class LoteUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    codigo_lote: Optional[str] = Field(
+        default=None,
+        max_length=_LONGITUD_NOMBRE,
+        description="Código legible del lote.",
+    )
     estado: Optional[LoteEstado] = Field(default=None, description="Estado del lote, CERRADO o ABIERTO.")
     fecha_vencimiento: Optional[datetime] = Field(
         default=None, description="Fecha y hora de vencimiento del lote."
@@ -315,6 +325,10 @@ class LoteRead(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: int = Field(description="Identificador del lote. Es su clave.")
+    codigo_lote: Optional[str] = Field(
+        default=None, max_length=_LONGITUD_NOMBRE, description="Código legible del lote."
+    )
+    fecha_ingreso: datetime = Field(description="Fecha y hora de ingreso del lote al depósito.")
     tipo: LoteTipo = Field(description="Naturaleza del lote, VERDE o TOSTADO.")
     estado: LoteEstado = Field(description="Estado del lote, CERRADO o ABIERTO.")
     fecha_vencimiento: datetime = Field(description="Fecha y hora de vencimiento del lote.")

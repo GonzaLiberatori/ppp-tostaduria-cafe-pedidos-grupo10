@@ -1,10 +1,11 @@
 import { useData } from '../../context/DataContext'
 import { useAuth } from '../../context/AuthContext'
+import { formatearMoneda, formatearKilos } from '../../utils/formatters'
 import { User, Mail, Phone, MapPin, CreditCard, Building } from 'lucide-react'
 
 export default function PerfilCliente() {
   const { user } = useAuth()
-  const { clientes, getClienteById } = useData()
+  const { getClienteById } = useData()
 
   const cliente = user?.clienteId ? getClienteById(user.clienteId) : null
 
@@ -22,8 +23,8 @@ export default function PerfilCliente() {
             <div className="flex items-center gap-3">
               <User className="w-5 h-5 text-coffee-500" />
               <div>
-                <p className="text-xs text-[var(--color-text-muted)]">Nombre de usuario</p>
-                <p className="font-medium text-[var(--color-text-primary)]">{user?.username}</p>
+                <p className="text-xs text-[var(--color-text-muted)]">Correo de acceso</p>
+                <p className="font-medium text-[var(--color-text-primary)]">{user?.correo || '—'}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -86,13 +87,13 @@ export default function PerfilCliente() {
           <div>
             <p className="text-sm text-[var(--color-text-muted)]">Kilos comprados (histórico)</p>
             <p className="text-2xl font-bold text-[var(--color-text-primary)] mt-1">
-              {cliente?.kilosComprados ? cliente.kilosComprados : 0} kg
+              {formatearKilos(cliente?.kilosComprados || 0)}
             </p>
           </div>
           <div>
             <p className="text-sm text-[var(--color-text-muted)]">Monto de deuda</p>
             <p className="text-2xl font-bold text-[var(--color-text-primary)] mt-1">
-              {cliente?.montoDeuda ? `$${cliente.montoDeuda.toLocaleString('es-AR')}` : '$0'}
+              {formatearMoneda(cliente?.montoDeuda || 0)}
             </p>
           </div>
         </div>

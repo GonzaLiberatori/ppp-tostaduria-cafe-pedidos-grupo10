@@ -2,16 +2,41 @@
 
 Carga variables de entorno desde ``.env`` y define la configuración centralizada
 para base de datos, seguridad y otros parámetros del sistema.
+
+La base de datos soportada es SQLite. Las rutas relativas de ``DATABASE_URL``
+se resuelven contra el directorio ``backend/`` para que el proyecto funcione
+sin importar desde qué directorio se lance el proceso.
 """
 
-import os
+from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Ruta absoluta del backend, para que la base SQLite por defecto no dependa del
-# directorio desde el que se lance el proceso.
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "demo.db")
+# Ruta absoluta del backend (backend/app/core/config.py -> backend/)
+BASE_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_DB_PATH = BASE_DIR / "db.sqlite"
+
+PREFIJO_SQLITE = "sqlite:///"
+
+
+def normalizar_url_sqlite(url: str) -> str:
+    """Valida que la URL sea SQLite y resuelve rutas relativas contra ``BASE_DIR``."""
+    if not url.startswith("sqlite"):
+        raise ValueError(
+            "Solo se admite SQLite como base de datos: DATABASE_URL debe "
+            "comenzar con 'sqlite:///' (o 'sqlite:///:memory:' en tests)."
+        )
+
+    if not url.startswith(PREFIJO_SQLITE):
+        # sqlite:// (base temporal) u otra variante sin ruta de archivo.
+        return url
+
+    ruta = url[len(PREFIJO_SQLITE) :]
+    if ruta in ("", ":memory:") or Path(ruta).is_absolute():
+        return url
+
+    return f"{PREFIJO_SQLITE}{(BASE_DIR / ruta).resolve().as_posix()}"
 
 
 class Settings(BaseSettings):
@@ -30,9 +55,15 @@ class Settings(BaseSettings):
     )
 
     # -----------------------------------------------------------------------
-    # Base de datos
+    # Base de datos (SQLite)
     # -----------------------------------------------------------------------
-    DATABASE_URL: str = f"sqlite:///{DEFAULT_DB_PATH}"
+    DATABASE_URL: str = f"{PREFIJO_SQLITE}{DEFAULT_DB_PATH.as_posix()}"
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validar_database_url(cls, url: str) -> str:
+        """Rechaza motores distintos de SQLite y normaliza la ruta del archivo."""
+        return normalizar_url_sqlite(url)
 
     # -----------------------------------------------------------------------
     # Seguridad y JWT

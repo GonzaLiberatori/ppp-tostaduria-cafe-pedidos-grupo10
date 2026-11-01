@@ -26,6 +26,10 @@ def get_catalogo_service(db: Session = Depends(get_db)) -> services.CatalogoServ
     return services.CatalogoService(db)
 
 
+def get_panel_service(db: Session = Depends(get_db)) -> services.PedidoPanelService:
+    return services.PedidoPanelService(db)
+
+
 # Dependency para usuario autenticado
 def get_current_user_required(
     current_user: TokenData = Depends(get_current_user)
@@ -85,6 +89,78 @@ def listar_pedidos(
         service.db, skip, limit, estado, None, None, None, None
     )
     return pedidos
+
+
+# ==================== PANEL ====================
+# Estas rutas van antes de "/{pedido_id}" para que "panel" no se interprete
+# como un id numérico.
+
+@router.get("/panel", response_model=List[schemas.PedidoPanelRead])
+def listar_pedidos_panel(
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoPanelService = Depends(get_panel_service),
+):
+    """Lista los pedidos con el contrato plano que consume el panel."""
+    return service.listar()
+
+
+@router.get("/panel/cliente/{cliente_id}", response_model=List[schemas.PedidoPanelRead])
+def listar_pedidos_panel_cliente(
+    cliente_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoPanelService = Depends(get_panel_service),
+):
+    """Lista los pedidos de un cliente con el contrato plano."""
+    return service.listar_por_cliente(cliente_id)
+
+
+@router.post(
+    "/panel",
+    response_model=schemas.PedidoPanelRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def crear_pedido_panel(
+    datos: schemas.PedidoPanelCreate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoPanelService = Depends(get_panel_service),
+):
+    """Crea un pedido desde el panel, descontando stock."""
+    try:
+        empleado_id = service.resolver_empleado_actual(current_user.email)
+        return service.crear(datos, empleado_persona_id=empleado_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/panel/{pedido_id}", response_model=schemas.PedidoPanelRead)
+def actualizar_pedido_panel(
+    pedido_id: int,
+    datos: schemas.PedidoPanelUpdate,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoPanelService = Depends(get_panel_service),
+):
+    """Actualiza un pedido desde el panel."""
+    try:
+        return service.actualizar(pedido_id, datos)
+    except services.PedidoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/panel/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)
+def eliminar_pedido_panel(
+    pedido_id: int,
+    current_user: TokenData = Depends(get_current_user_required),
+    service: services.PedidoPanelService = Depends(get_panel_service),
+):
+    """Elimina un pedido pendiente desde el panel."""
+    try:
+        service.eliminar(pedido_id)
+    except services.PedidoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{pedido_id}", response_model=schemas.PedidoDetailRead)

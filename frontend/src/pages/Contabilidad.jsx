@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useData } from '../context/DataContext'
+import { useToast } from '../hooks/useToast.jsx'
 import { CATEGORIAS_GASTO } from '../data/constants'
 import GastoForm from '../components/forms/GastoForm'
 import Table from '../components/ui/Table'
@@ -40,6 +41,7 @@ export default function Contabilidad() {
     getContabilidadMensual,
     getTotalesGenerales 
   } = useData()
+  const { success, error: toastError } = useToast()
 
   const [showForm, setShowForm] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
@@ -71,24 +73,35 @@ export default function Contabilidad() {
     return Object.entries(categorias).map(([categoria, monto]) => ({ categoria, monto }))
   }, [gastos])
 
-  const handleSubmit = (data, id) => {
-    if (id) {
-      updateGasto(id, data)
-    } else {
-      addGasto(data)
+  const handleSubmit = async (data, id) => {
+    try {
+      if (id) {
+        await updateGasto(id, data)
+        success('Gasto actualizado')
+      } else {
+        await addGasto(data)
+        success('Gasto registrado')
+      }
+      setShowForm(false)
+      setEditingItem(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo guardar el gasto')
     }
-    setShowForm(false)
-    setEditingItem(null)
   }
 
   const handleDelete = (id) => {
     setDeleteConfirm(id)
   }
 
-  const confirmDelete = () => {
-    if (deleteConfirm) {
-      deleteGasto(deleteConfirm)
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return
+
+    try {
+      await deleteGasto(deleteConfirm)
+      success('Gasto eliminado')
       setDeleteConfirm(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo eliminar el gasto')
     }
   }
 

@@ -1,11 +1,20 @@
 """Modelos del módulo de clientes, personas y cuentas corrientes."""
 
 import enum
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Column, Date, Enum as SQLEnum, ForeignKey, Integer, Numeric, String
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Enum as SQLEnum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+)
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -27,7 +36,8 @@ class Persona(Base):
     nombre = Column(String(45), nullable=False)
     apellido = Column(String(45), nullable=False)
     CUIT = Column(String(15), unique=True, nullable=True)
-    telefono = Column(String(25), unique=True, nullable=False)
+    email = Column(String(100), unique=True, nullable=True)
+    telefono = Column(String(25), unique=True, nullable=True)
     cuenta_id = Column(Integer, ForeignKey("cuenta.id"), nullable=True)
 
     cuenta = relationship("Cuenta", back_populates="persona")
@@ -43,6 +53,7 @@ class Cliente(Base):
     persona_id = Column(Integer, ForeignKey("persona.id"), primary_key=True)
     tipo = Column(SQLEnum(TipoCliente), nullable=False)
     direccion_de_entrega = Column(String(100), nullable=True)
+    fecha_alta = Column(DateTime, nullable=True, default=datetime.utcnow)
 
     # Cuenta corriente
     saldo_cuenta_corriente = Column(Numeric(12, 2), nullable=False, default=0)

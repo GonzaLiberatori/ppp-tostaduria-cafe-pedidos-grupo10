@@ -4,6 +4,7 @@ Consultas puras: sin reglas de negocio y sin commits. Tanto la decisión de qué
 operaciones proceden como la frontera transaccional viven en ``services.py``.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -220,6 +221,8 @@ def crear_lote(db: Session, datos: LoteCreate, kg_disponibles: Decimal) -> Lote:
     de dónde sale ese número, solo lo persiste.
     """
     lote = Lote(
+        codigo_lote=datos.codigo_lote,
+        fecha_ingreso=datetime.utcnow(),
         tipo=datos.tipo,
         estado=datos.estado,
         fecha_vencimiento=datos.fecha_vencimiento,

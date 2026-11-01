@@ -6,21 +6,26 @@ import Select from '../ui/Select'
 import Modal from '../ui/Modal'
 import { formatearMoneda } from '../../utils/formatters'
 
+const ESTADOS_BOLSA = [
+  { value: 'cerrada', label: 'Cerrada (sellada)' },
+  { value: 'abierta', label: 'Abierta (en uso)' },
+]
+
 export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
+  const esEdicion = Boolean(initialData)
+
   const [formData, setFormData] = useState({
     tipo: 'verde',
     variedad: '',
     origen: '',
     precioKg: '',
     lotePrincipal: '',
-    // Para nueva bolsa inicial
     bolsaInicialEstado: 'cerrada',
     bolsaInicialKilos: '',
     bolsaInicialLoteRef: '',
   })
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
-  const [agregarMasBolsas, setAgregarMasBolsas] = useState(false)
   const [bolsasAdicionales, setBolsasAdicionales] = useState([])
 
   useEffect(() => {
@@ -35,9 +40,6 @@ export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
         bolsaInicialKilos: '',
         bolsaInicialLoteRef: '',
       })
-      setBolsasAdicionales([])
-      setAgregarMasBolsas(false)
-      setErrors({})
     } else {
       setFormData({
         tipo: 'verde',
@@ -49,48 +51,81 @@ export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
         bolsaInicialKilos: '',
         bolsaInicialLoteRef: '',
       })
-      setBolsasAdicionales([])
-      setAgregarMasBolsas(false)
-      setErrors({})
     }
+
+    setBolsasAdicionales([])
+    setErrors({})
   }, [initialData, isOpen])
 
   const validate = () => {
     const newErrors = {}
+
     if (!formData.variedad.trim()) newErrors.variedad = 'La variedad es obligatoria'
     if (!formData.origen.trim()) newErrors.origen = 'El origen es obligatorio'
-    if (!formData.precioKg || parseFloat(formData.precioKg) <= 0) newErrors.precioKg = 'El precio por kg debe ser mayor a 0'
-    if (!formData.lotePrincipal.trim()) newErrors.lotePrincipal = 'El lote principal es obligatorio'
-    if (!formData.bolsaInicialKilos || parseFloat(formData.bolsaInicialKilos) <= 0) {
-      newErrors.bolsaInicialKilos = 'Los kilos de la bolsa inicial deben ser mayor a 0'
+    if (!formData.precioKg || parseFloat(formData.precioKg) <= 0) {
+      newErrors.precioKg = 'El precio por kg debe ser mayor a 0'
     }
-    if (!formData.bolsaInicialLoteRef.trim()) newErrors.bolsaInicialLoteRef = 'La referencia de lote es obligatoria'
+    if (!formData.lotePrincipal.trim()) {
+      newErrors.lotePrincipal = 'El lote principal es obligatorio'
+    }
+
+    if (!esEdicion) {
+      if (!formData.bolsaInicialKilos || parseFloat(formData.bolsaInicialKilos) <= 0) {
+        newErrors.bolsaInicialKilos = 'Los kilos deben ser mayores a 0'
+      }
+      if (!formData.bolsaInicialLoteRef.trim()) {
+        newErrors.bolsaInicialLoteRef = 'La referencia de lote es obligatoria'
+      }
+
+      bolsasAdicionales.forEach((bolsa, index) => {
+        if (!bolsa.kilos || parseFloat(bolsa.kilos) <= 0) {
+          newErrors[`bolsa${index}_kilos`] = 'Kilos inválidos'
+        }
+        if (!bolsa.loteRef.trim()) {
+          newErrors[`bolsa${index}_lote`] = 'Referencia obligatoria'
+        }
+      })
+    }
+
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!validate()) return
-    
+
     setSubmitting(true)
-    const bolsaInicial = {
-      estado: formData.bolsaInicialEstado,
-      kilos: parseFloat(formData.bolsaInicialKilos),
-      loteRef: formData.bolsaInicialLoteRef.trim().toUpperCase(),
-    }
-    const bolsas = [bolsaInicial, ...bolsasAdicionales.filter(b => b.kilos > 0)]
-    
+
     const data = {
-      tipo: formData.tipo,
       variedad: formData.variedad.trim(),
       origen: formData.origen.trim(),
       precioKg: parseFloat(formData.precioKg),
       lotePrincipal: formData.lotePrincipal.trim().toUpperCase(),
-      bolsas,
     }
-    onSubmit(data, initialData?.id)
-    setSubmitting(false)
+
+    // El tipo no se puede cambiar y las bolsas se administran por separado.
+    if (!esEdicion) {
+      data.tipo = formData.tipo
+      data.bolsas = [
+        {
+          estado: formData.bolsaInicialEstado,
+          kilos: parseFloat(formData.bolsaInicialKilos),
+          loteRef: formData.bolsaInicialLoteRef.trim().toUpperCase(),
+        },
+        ...bolsasAdicionales.map(bolsa => ({
+          estado: bolsa.estado,
+          kilos: parseFloat(bolsa.kilos),
+          loteRef: bolsa.loteRef.trim().toUpperCase(),
+        })),
+      ]
+    }
+
+    try {
+      await onSubmit(data, initialData?.id)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const handleChange = (e) => {
@@ -100,11 +135,16 @@ export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
   }
 
   const handleBolsaChange = (index, field, value) => {
-    setBolsasAdicionales(prev => prev.map((b, i) => i === index ? { ...b, [field]: value } : b))
+    setBolsasAdicionales(prev => prev.map((bolsa, i) => (
+      i === index ? { ...bolsa, [field]: value } : bolsa
+    )))
   }
 
   const addBolsaAdicional = () => {
-    setBolsasAdicionales(prev => [...prev, { estado: 'cerrada', kilos: '', loteRef: '' }])
+    setBolsasAdicionales(prev => [
+      ...prev,
+      { estado: 'cerrada', kilos: '', loteRef: '' },
+    ])
   }
 
   const removeBolsaAdicional = (index) => {
@@ -113,16 +153,16 @@ export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
 
   const totalKilos = [
     parseFloat(formData.bolsaInicialKilos) || 0,
-    ...bolsasAdicionales.map(b => parseFloat(b.kilos) || 0)
+    ...bolsasAdicionales.map(bolsa => parseFloat(bolsa.kilos) || 0),
   ].reduce((a, b) => a + b, 0)
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={initialData ? 'Editar Café' : 'Nuevo Café'}
+      title={esEdicion ? 'Editar Café' : 'Nuevo Café'}
       confirmAction={handleSubmit}
-      confirmText={initialData ? 'Actualizar' : 'Crear'}
+      confirmText={esEdicion ? 'Actualizar' : 'Crear'}
       loading={submitting}
       size="lg"
     >
@@ -140,6 +180,8 @@ export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
               onChange={handleChange}
               options={TIPOS_STOCK}
               error={errors.tipo}
+              disabled={esEdicion}
+              help={esEdicion ? 'El tipo de café no se puede modificar.' : undefined}
             />
             <Input
               label="Lote Principal"
@@ -182,95 +224,99 @@ export default function StockForm({ isOpen, onClose, initialData, onSubmit }) {
           />
         </div>
 
-        <div className="bg-green-500/5 border border-green-500/20 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-medium text-[var(--color-text-primary)] flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500"></span>
-              Bolsas Iniciales
-            </h3>
-            {!agregarMasBolsas && !initialData && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setAgregarMasBolsas(true)}>
-                + Agregar más bolsas
-              </Button>
-            )}
+        {esEdicion ? (
+          <div className="p-4 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-xl">
+            <p className="text-sm text-[var(--color-text-secondary)]">
+              Las bolsas de este café se administran desde la tabla de stock.
+              Allí puedes agregar, vaciar o cambiar el estado de cada una.
+            </p>
           </div>
-
-          <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Select
-                label="Estado"
-                name="bolsaInicialEstado"
-                value={formData.bolsaInicialEstado}
-                onChange={handleChange}
-                options={[
-                  { value: 'cerrada', label: 'Cerrada (sellada)' },
-                  { value: 'abierta', label: 'Abierta (en uso)' },
-                ]}
-              />
-              <Input
-                label="Kilos"
-                name="bolsaInicialKilos"
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={formData.bolsaInicialKilos}
-                onChange={handleChange}
-                placeholder="0.00"
-                error={errors.bolsaInicialKilos}
-              />
-              <Input
-                label="Ref. Lote"
-                name="bolsaInicialLoteRef"
-                value={formData.bolsaInicialLoteRef}
-                onChange={handleChange}
-                placeholder="Ej: LOTE-2026-001-A"
-                error={errors.bolsaInicialLoteRef}
-              />
+        ) : (
+          <div className="bg-green-500/5 border border-green-500/20 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-medium text-[var(--color-text-primary)] flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                Bolsas Iniciales
+              </h3>
             </div>
 
-            {agregarMasBolsas && bolsasAdicionales.map((bolsa, index) => (
-              <div key={index} className="grid gap-3 sm:grid-cols-3 items-end p-3 bg-[var(--color-bg-tertiary)] rounded-lg">
+            <div className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <Select
-                  value={bolsa.estado}
-                  onChange={e => handleBolsaChange(index, 'estado', e.target.value)}
-                  options={[
-                    { value: 'cerrada', label: 'Cerrada' },
-                    { value: 'abierta', label: 'Abierta' },
-                  ]}
-                  label=""
+                  label="Estado"
+                  name="bolsaInicialEstado"
+                  value={formData.bolsaInicialEstado}
+                  onChange={handleChange}
+                  options={ESTADOS_BOLSA}
                 />
                 <Input
+                  label="Kilos"
+                  name="bolsaInicialKilos"
                   type="number"
                   step="0.01"
                   min="0.01"
-                  value={bolsa.kilos}
-                  onChange={e => handleBolsaChange(index, 'kilos', e.target.value)}
-                  placeholder="Kilos"
-                  label=""
+                  value={formData.bolsaInicialKilos}
+                  onChange={handleChange}
+                  placeholder="0.00"
+                  error={errors.bolsaInicialKilos}
                 />
-                <div className="flex gap-2">
-                  <Input
-                    value={bolsa.loteRef}
-                    onChange={e => handleBolsaChange(index, 'loteRef', e.target.value)}
-                    placeholder="Ref. Lote"
+                <Input
+                  label="Ref. Lote"
+                  name="bolsaInicialLoteRef"
+                  value={formData.bolsaInicialLoteRef}
+                  onChange={handleChange}
+                  placeholder="Ej: LOTE-2026-001-A"
+                  error={errors.bolsaInicialLoteRef}
+                />
+              </div>
+
+              {bolsasAdicionales.map((bolsa, index) => (
+                <div key={index} className="grid gap-3 sm:grid-cols-3 items-end p-3 bg-[var(--color-bg-tertiary)] rounded-lg">
+                  <Select
+                    value={bolsa.estado}
+                    onChange={e => handleBolsaChange(index, 'estado', e.target.value)}
+                    options={ESTADOS_BOLSA}
                     label=""
                   />
-                  <Button type="button" variant="ghost" size="sm" onClick={() => removeBolsaAdicional(index)} aria-label="Eliminar bolsa">
-                    <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                  </Button>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={bolsa.kilos}
+                    onChange={e => handleBolsaChange(index, 'kilos', e.target.value)}
+                    placeholder="Kilos"
+                    error={errors[`bolsa${index}_kilos`]}
+                    label=""
+                  />
+                  <div className="flex gap-2">
+                    <Input
+                      value={bolsa.loteRef}
+                      onChange={e => handleBolsaChange(index, 'loteRef', e.target.value)}
+                      placeholder="Ref. Lote"
+                      error={errors[`bolsa${index}_lote`]}
+                      label=""
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeBolsaAdicional(index)}
+                      aria-label="Eliminar bolsa"
+                    >
+                      <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
 
-            {!agregarMasBolsas && !initialData && (
-              <Button type="button" variant="secondary" size="sm" onClick={addBolsaAdicional} className="w-full sm:w-auto">
-                + Agregar primera bolsa adicional
+              <Button type="button" variant="secondary" size="sm" onClick={addBolsaAdicional}>
+                + Agregar otra bolsa
               </Button>
-            )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {(totalKilos > 0 || formData.precioKg) && (
+        {!esEdicion && (totalKilos > 0 || formData.precioKg) && (
           <div className="p-3 bg-[var(--color-bg-tertiary)] rounded-lg">
             <p className="text-sm text-[var(--color-text-secondary)]">
               Total kilos: <strong className="text-[var(--color-text-primary)]">{totalKilos.toFixed(2)} kg</strong>

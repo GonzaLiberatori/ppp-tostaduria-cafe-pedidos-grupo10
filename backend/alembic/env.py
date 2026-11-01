@@ -59,6 +59,9 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        # SQLite no soporta la mayoría de los ALTER TABLE: batch mode recrea
+        # la tabla para aplicar cambios de columnas o constraints.
+        render_as_batch=True,
     )
 
     with context.begin_transaction():
@@ -83,6 +86,9 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            # SQLite no soporta la mayoría de los ALTER TABLE: batch mode
+            # recrea la tabla para aplicar cambios de columnas o constraints.
+            render_as_batch=True,
         )
 
         with context.begin_transaction():

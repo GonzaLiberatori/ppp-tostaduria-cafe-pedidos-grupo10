@@ -38,7 +38,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_cuenta_correo'), 'cuenta', ['correo'], unique=True)
     op.create_index(op.f('ix_cuenta_id'), 'cuenta', ['id'], unique=False)
     op.create_table('gastos',
-    sa.Column('id', sa.BigInteger(), autoincrement=True, nullable=False),
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('fecha', sa.DateTime(timezone=True), nullable=False),
     sa.Column('categoria', sa.String(length=50), nullable=False),
     sa.Column('descripcion', sa.Text(), nullable=False),

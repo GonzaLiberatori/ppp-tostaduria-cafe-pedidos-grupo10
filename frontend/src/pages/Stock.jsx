@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useData } from '../context/DataContext'
+import { useToast } from '../hooks/useToast.jsx'
 import { TIPOS_STOCK } from '../data/constants'
 import StockForm from '../components/forms/StockForm'
 import BolsaCard from '../components/forms/BolsaCard'
@@ -23,6 +24,7 @@ export default function Stock() {
     updateBolsa,
     deleteBolsa,
   } = useData()
+  const { success, error: toastError } = useToast()
 
   const [showForm, setShowForm] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
@@ -52,14 +54,20 @@ export default function Stock() {
     })
   }, [stock, filters])
 
-  const handleSubmit = (data, id) => {
-    if (id) {
-      updateStock(id, data)
-    } else {
-      addStock(data)
+  const handleSubmit = async (data, id) => {
+    try {
+      if (id) {
+        await updateStock(id, data)
+        success('Café actualizado')
+      } else {
+        await addStock(data)
+        success('Café creado')
+      }
+      setShowForm(false)
+      setEditingItem(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo guardar el café')
     }
-    setShowForm(false)
-    setEditingItem(null)
   }
 
   const handleEdit = (item) => {
@@ -72,10 +80,15 @@ export default function Stock() {
     setDeleteConfirm(id)
   }
 
-  const confirmDelete = () => {
-    if (deleteConfirm) {
-      deleteStock(deleteConfirm)
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return
+
+    try {
+      await deleteStock(deleteConfirm)
+      success('Café eliminado')
       setDeleteConfirm(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo eliminar el café')
     }
   }
 
@@ -83,31 +96,39 @@ export default function Stock() {
     setExpandedRow(prev => prev === id ? null : id)
   }
 
-  const handleBolsaUpdateKilos = (stockId, bolsaId, kilos) => {
+  const handleBolsaUpdateKilos = (stockId, bolsaId, kilos) => (
     updateBolsa(stockId, bolsaId, { kilos })
-  }
+  )
 
   const handleBolsaToggleEstado = (stockId, bolsaId) => {
     const item = stock.find(s => s.id === stockId)
     const bolsa = item?.bolsas.find(b => b.id === bolsaId)
-    if (bolsa) {
-      updateBolsa(stockId, bolsaId, { estado: bolsa.estado === 'cerrada' ? 'abierta' : 'cerrada' })
-    }
+    if (!bolsa) return Promise.resolve()
+
+    return updateBolsa(stockId, bolsaId, {
+      estado: bolsa.estado === 'cerrada' ? 'abierta' : 'cerrada',
+    })
   }
 
-  const handleBolsaDelete = (stockId, bolsaId) => {
+  const handleBolsaDelete = (stockId, bolsaId) => (
     deleteBolsa(stockId, bolsaId)
-  }
+  )
 
-  const handleAddBolsa = (stockId) => {
+  const handleAddBolsa = async (stockId) => {
     const item = stock.find(s => s.id === stockId)
     const nuevoNumero = (item?.bolsas?.length || 0) + 1
     const loteRef = `${item?.lotePrincipal || 'LOTE'}-${String(nuevoNumero).padStart(2, '0')}`
-    addBolsa(stockId, {
-      estado: 'cerrada',
-      kilos: item.tipo === 'verde' ? 60 : 1,
-      loteRef,
-    })
+
+    try {
+      await addBolsa(stockId, {
+        estado: 'cerrada',
+        kilos: item.tipo === 'verde' ? 60 : 1,
+        loteRef,
+      })
+      success('Bolsa agregada')
+    } catch (err) {
+      toastError(err.message || 'No se pudo agregar la bolsa')
+    }
   }
 
   const columns = [

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useData } from '../context/DataContext'
+import { useToast } from '../hooks/useToast.jsx'
 import { ESTADOS_PEDIDO, MEDIOS_CONTACTO } from '../data/constants'
 import PedidoForm from '../components/forms/PedidoForm'
 import Table from '../components/ui/Table'
@@ -19,6 +20,7 @@ export default function Pedidos() {
     deletePedido,
     getPedidosByEstado 
   } = useData()
+  const { success, error: toastError } = useToast()
 
   const [showForm, setShowForm] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
@@ -44,14 +46,20 @@ export default function Pedidos() {
     })
   }, [pedidos, clientes, filters])
 
-  const handleSubmit = (data, id) => {
-    if (id) {
-      updatePedido(id, data)
-    } else {
-      addPedido(data)
+  const handleSubmit = async (data, id) => {
+    try {
+      if (id) {
+        await updatePedido(id, data)
+        success('Pedido actualizado')
+      } else {
+        await addPedido(data)
+        success('Pedido creado')
+      }
+      setShowForm(false)
+      setEditingItem(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo guardar el pedido')
     }
-    setShowForm(false)
-    setEditingItem(null)
   }
 
   const handleEdit = (item) => {
@@ -67,15 +75,25 @@ export default function Pedidos() {
     setDeleteConfirm(id)
   }
 
-  const confirmDelete = () => {
-    if (deleteConfirm) {
-      deletePedido(deleteConfirm)
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return
+
+    try {
+      await deletePedido(deleteConfirm)
+      success('Pedido eliminado')
       setDeleteConfirm(null)
+    } catch (err) {
+      toastError(err.message || 'No se pudo eliminar el pedido')
     }
   }
 
-  const changeEstado = (pedido, nuevoEstado) => {
-    updatePedido(pedido.id, { estado: nuevoEstado })
+  const changeEstado = async (pedido, nuevoEstado) => {
+    try {
+      await updatePedido(pedido.id, { estado: nuevoEstado })
+      success(`Pedido actualizado a ${nuevoEstado}`)
+    } catch (err) {
+      toastError(err.message || 'No se pudo cambiar el estado')
+    }
   }
 
   const estadoIcon = {

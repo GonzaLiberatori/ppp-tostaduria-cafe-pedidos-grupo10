@@ -1,6 +1,5 @@
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { useState } from 'react'
 import { ShoppingCart, List, User, Clock, Coffee, LogOut } from 'lucide-react'
 
 const TABS = [
@@ -14,10 +13,9 @@ const TABS = [
 export default function LayoutCliente() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState('/cliente')
+  const { pathname: activeTab } = useLocation()
 
   const handleTabChange = (path) => {
-    setActiveTab(path)
     navigate(path)
   }
 

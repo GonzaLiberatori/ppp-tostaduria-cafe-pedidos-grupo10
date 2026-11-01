@@ -1,7 +1,7 @@
 """tueste en gramos, tipo de cafe y consumos
 
 Revision ID: b7a1c9d4e2f0
-Revises: 8e15bc96d2aa
+Revises: 57cf7419baaf
 Create Date: 2026-11-01 10:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "b7a1c9d4e2f0"
-down_revision: Union[str, Sequence[str], None] = "8e15bc96d2aa"
+down_revision: Union[str, Sequence[str], None] = "57cf7419baaf"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
