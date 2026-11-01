@@ -37,9 +37,15 @@ async function request(endpoint, options = {}) {
     
     // Handle 401 - token expired or invalid
     if (response.status === 401) {
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      // Sin token no hay una sesión real que expirar: el frontend de demo usa
+      // autenticación mock y algunos endpoints protegidos responden 401. En ese
+      // caso se propaga el error para que el consumidor haga su fallback, sin
+      // redirigir (redirigir acá provoca un bucle de recargas con el login mock).
+      if (token) {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
       throw new ApiError('Sesión expirada', 401);
     }
 
@@ -114,7 +120,24 @@ export const api = {
   updateCliente: (id, data) => request(`/clientes/${id}`, { method: 'PATCH', body: data }),
   deleteCliente: (id) => request(`/clientes/${id}`, { method: 'DELETE' }),
 
-  // Stock/Inventario
+  // Inventario (endpoints canónicos)
+  getTiposDeCafe: () => request('/inventario/tipos-de-cafe'),
+  getLotes: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        searchParams.append(key, value);
+      }
+    });
+    return request(`/inventario/lotes?${searchParams.toString()}`);
+  },
+  getLote: (id) => request(`/inventario/lotes/${id}`),
+
+  // Producción
+  getTuestes: () => request('/produccion/tuestes'),
+  createTueste: (data) => request('/produccion/tuestes', { method: 'POST', body: data }),
+
+  // Stock/Inventario (endpoints heredados)
   getStock: (params = {}) => {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
@@ -129,10 +152,6 @@ export const api = {
   updateStock: (id, data) => request(`/inventario/${id}`, { method: 'PATCH', body: data }),
   deleteStock: (id) => request(`/inventario/${id}`, { method: 'DELETE' }),
   addBolsa: (stockId, bolsa) => request(`/inventario/${stockId}/bolsas`, { method: 'POST', body: bolsa }),
-
-  // Producción
-  getOrdenesTueste: () => request('/produccion/ordenes'),
-  createOrdenTueste: (data) => request('/produccion/ordenes', { method: 'POST', body: data }),
 
   // Gastos/Contabilidad
   getGastos: () => request('/gastos/'),

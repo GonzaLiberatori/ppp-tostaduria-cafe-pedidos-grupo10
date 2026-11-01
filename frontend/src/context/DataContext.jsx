@@ -103,10 +103,11 @@ export function DataProvider({ children }) {
     }))
   })
 
-  // Consumo FIFO - ahora delega al backend via crear_pedido
-  const consumirStockFIFO = useCallback(async (stockId, kilos) => {
-    // El consumo real ocurre en el backend al crear pedido
-    // Este método se mantiene para compatibilidad con preview en frontend
+  // Consumo FIFO - simulación local para la vista previa del formulario
+  const consumirStockFIFO = useCallback((stockId, kilos) => {
+    // El consumo real ocurre en el backend al crear el pedido. Este método
+    // devuelve el preview de forma sincrónica porque el formulario lo usa
+    // directamente durante el render.
     const item = stock.find(s => s.id === stockId)
     if (!item) return { consumo: [], faltante: kilos }
     

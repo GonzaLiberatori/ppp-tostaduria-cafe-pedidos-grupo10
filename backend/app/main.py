@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.modules.auth.router import router as auth_router
 from app.modules.inventario.router import router as inventario_router
 from app.modules.pedidos.router import router as pedidos_router
+from app.modules.produccion.router import router as produccion_router
 
 # ---------------------------------------------------------------------------
 # Instancia de FastAPI
@@ -42,6 +43,10 @@ app.include_router(pedidos_router, prefix=settings.API_V1_STR)
 app.include_router(
     inventario_router,
     prefix=f"{settings.API_V1_STR}/inventario",
+)
+app.include_router(
+    produccion_router,
+    prefix=f"{settings.API_V1_STR}/produccion",
 )
 
 

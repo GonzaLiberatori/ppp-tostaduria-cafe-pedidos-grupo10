@@ -1,12 +1,15 @@
 import enum
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.modules.produccion.models import OrdenTueste
 
 
 class LoteTipo(str, enum.Enum):
@@ -70,25 +73,18 @@ class Lote(Base):
     )
     fecha_vencimiento: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     humedad: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
-    kg_disponibles: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    kg_reales: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    # Tres decimales: la operación de tueste se informa en gramos y necesita
+    # guardar fracciones de kilo sin perder precisión.
+    kg_disponibles: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    kg_reales: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     ubicacion_fisica: Mapped[str] = mapped_column(String(50), nullable=False)
     observaciones: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tipo_de_cafe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tipo_de_cafe.id"), nullable=True, index=True)
     blend_id: Mapped[Optional[int]] = mapped_column(ForeignKey("blend.id"), nullable=True, index=True)
-    # Sin FK: la tabla "orden_tueste" no existe todavía porque producción no
-    # define OrdenTueste, y la referencia rota hace fallar
-    # Base.metadata.create_all() con NoReferencedTableError, lo que impide crear
-    # esta tabla en absoluto. Hay que rehacer la FK con
-    # ForeignKey("orden_tueste.id") cuando exista ese modelo, y regenerar la
-    # migración en ese momento.
-    orden_tueste_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    orden_tueste_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("orden_tueste.id"), nullable=True, index=True
+    )
 
     tipo_de_cafe: Mapped[Optional["TipoDeCafe"]] = relationship(back_populates="lotes")
     blend: Mapped[Optional["Blend"]] = relationship(back_populates="lotes")
-    # Deshabilitado: la anotación Mapped[Optional["object"]] hace que SQLAlchemy
-    # trate "object" como el nombre de una entidad y rompe configure_mappers(),
-    # lo que impide instanciar cualquier objeto ORM del módulo. La tabla
-    # "orden_tueste" todavía no existe porque producción no define OrdenTueste.
-    # Se reactiva junto con ese modelo, usando la anotación correcta.
-    # orden_tueste: Mapped[Optional["object"]] = relationship()
+    orden_tueste: Mapped[Optional["OrdenTueste"]] = relationship(back_populates="lotes")
