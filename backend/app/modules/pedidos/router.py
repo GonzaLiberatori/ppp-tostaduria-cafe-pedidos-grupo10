@@ -5,14 +5,19 @@ from datetime import datetime
 from decimal import Decimal
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_account, get_current_user
+from app.modules.auth.models import Cuenta, UserRole
 from app.modules.auth.schemas import TokenData
 from app.modules.ventas import services as ventas_services
 
 from app.modules.pedidos import schemas, services
+from app.modules.clientes import crud as clientes_crud
 
 
 router = APIRouter(prefix="/pedidos", tags=["Pedidos"])
+
+# Roles internos que pueden usar el panel completo de pedidos
+ROLES_PANEL_INTERNO = (UserRole.ADMINISTRADOR, UserRole.CAJERO, UserRole.OPERARIO)
 
 
 def _lanzar_http(exc: Exception) -> NoReturn:
@@ -64,6 +69,34 @@ def get_current_user_required(
     return current_user
 
 
+def _exigir_panel_interno(cuenta: Cuenta) -> None:
+    """Reserva una operación del panel al personal interno."""
+    if cuenta.rol not in ROLES_PANEL_INTERNO:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tenés permisos para esta operación.",
+        )
+
+
+def _cliente_id_de_cuenta(db: Session, cuenta: Cuenta) -> Optional[int]:
+    """Devuelve el ``persona_id`` del cliente vinculado a la cuenta."""
+    cliente = clientes_crud.obtener_cliente_por_cuenta(db, cuenta.id)
+    return cliente.persona_id if cliente else None
+
+
+def _exigir_cliente_propio(db: Session, cuenta: Cuenta, cliente_id: int) -> None:
+    """Un Cliente solo puede consultar sus propios pedidos."""
+    if cuenta.rol is not UserRole.CLIENTE:
+        _exigir_panel_interno(cuenta)
+        return
+
+    if _cliente_id_de_cuenta(db, cuenta) != cliente_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tenés permisos para ver pedidos de otro cliente.",
+        )
+
+
 # ==================== PEDIDOS ====================
 
 @router.post("/", response_model=schemas.PedidoResponse, status_code=status.HTTP_201_CREATED)
@@ -108,9 +141,11 @@ def listar_pedidos(
     fecha_hasta: Optional[datetime] = None,
     q: Optional[str] = None,
     current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Listar todos los pedidos con filtros y paginación"""
+    _exigir_panel_interno(cuenta)
     from app.modules.pedidos import crud
     pedidos = crud.get_pedidos_con_filtros(
         service.db, skip, limit, estado, None, None, None, None
@@ -124,20 +159,22 @@ def listar_pedidos(
 
 @router.get("/panel", response_model=List[schemas.PedidoPanelRead])
 def listar_pedidos_panel(
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoPanelService = Depends(get_panel_service),
 ):
     """Lista los pedidos con el contrato plano que consume el panel."""
+    _exigir_panel_interno(cuenta)
     return service.listar()
 
 
 @router.get("/panel/cliente/{cliente_id}", response_model=List[schemas.PedidoPanelRead])
 def listar_pedidos_panel_cliente(
     cliente_id: int,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoPanelService = Depends(get_panel_service),
 ):
-    """Lista los pedidos de un cliente con el contrato plano."""
+    """Lista los pedidos de un cliente; el Cliente solo ve los propios."""
+    _exigir_cliente_propio(service.db, cuenta, cliente_id)
     return service.listar_por_cliente(cliente_id)
 
 
@@ -148,12 +185,29 @@ def listar_pedidos_panel_cliente(
 )
 def crear_pedido_panel(
     datos: schemas.PedidoPanelCreate,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoPanelService = Depends(get_panel_service),
 ):
-    """Crea un pedido desde el panel, descontando stock."""
+    """Crea un pedido desde el panel, descontando stock.
+
+    El Cliente puede comprar desde el portal, pero el pedido siempre queda a su
+    nombre y en estado ``Pendiente``: no puede fijar otro cliente ni marcarlo
+    como entregado (eso generaría deuda y venta).
+    """
+    if cuenta.rol is UserRole.CLIENTE:
+        propio_id = _cliente_id_de_cuenta(service.db, cuenta)
+        if propio_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="La cuenta no está vinculada a un cliente.",
+            )
+        datos.clienteId = str(propio_id)
+        datos.estado = "Pendiente"
+    else:
+        _exigir_panel_interno(cuenta)
+
     try:
-        empleado_id = service.resolver_empleado_actual(current_user.email)
+        empleado_id = service.resolver_empleado_actual(cuenta.correo)
         return service.crear(datos, empleado_persona_id=empleado_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -163,7 +217,7 @@ def crear_pedido_panel(
 def actualizar_pedido_panel(
     pedido_id: int,
     datos: schemas.PedidoPanelUpdate,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoPanelService = Depends(get_panel_service),
 ):
     """Actualiza un pedido desde el panel.
@@ -171,8 +225,9 @@ def actualizar_pedido_panel(
     Si el cambio de estado es la entrega, la condición de pago viaja en el mismo
     cuerpo y la cuenta autenticada queda auditada en la venta y su historial.
     """
+    _exigir_panel_interno(cuenta)
     try:
-        cuenta_id = service.resolver_cuenta_actual(current_user.email)
+        cuenta_id = service.resolver_cuenta_actual(cuenta.correo)
         return service.actualizar(pedido_id, datos, cuenta_id=cuenta_id)
     except Exception as exc:
         _lanzar_http(exc)
@@ -181,10 +236,11 @@ def actualizar_pedido_panel(
 @router.delete("/panel/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_pedido_panel(
     pedido_id: int,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoPanelService = Depends(get_panel_service),
 ):
     """Elimina un pedido pendiente desde el panel."""
+    _exigir_panel_interno(cuenta)
     try:
         service.eliminar(pedido_id)
     except services.PedidoNoEncontrado as e:
@@ -196,10 +252,11 @@ def eliminar_pedido_panel(
 @router.get("/{pedido_id}", response_model=schemas.PedidoDetailRead)
 def obtener_pedido(
     pedido_id: int,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Obtener un pedido por ID con items, cliente e historial"""
+    _exigir_panel_interno(cuenta)
     pedido = service.obtener_pedido_por_id(pedido_id)
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
@@ -210,16 +267,15 @@ def obtener_pedido(
 def cambiar_estado_pedido(
     pedido_id: int,
     estado: str,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta_actual: Cuenta = Depends(get_current_account),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Cambiar estado del pedido (PENDIENTE, LISTO, ENTREGADO)"""
+    _exigir_panel_interno(cuenta_actual)
     try:
         # Obtener usuario_id del usuario autenticado
-        from app.modules.auth.models import Cuenta
         from app.modules.pedidos.models import Persona
-        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
-        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta_actual.id).first()
         usuario_id = persona.id if persona else None
         
         pedido = service.cambiar_estado_pedido(pedido_id, estado, usuario_id)
@@ -234,15 +290,14 @@ def cambiar_estado_pedido(
 def actualizar_pedido(
     pedido_id: int,
     pedido_update: schemas.PedidoUpdate,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta_actual: Cuenta = Depends(get_current_account),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Actualizar un pedido (estado, método de despacho, observaciones). No permite cambiar detalles ni totales."""
+    _exigir_panel_interno(cuenta_actual)
     try:
-        from app.modules.auth.models import Cuenta
         from app.modules.pedidos.models import Persona
-        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
-        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta_actual.id).first()
         usuario_id = persona.id if persona else None
         
         pedido = service.actualizar_pedido(pedido_id, pedido_update, detalles=None, usuario_id=usuario_id)
@@ -257,15 +312,14 @@ def actualizar_pedido(
 def actualizar_pedido_con_detalles(
     pedido_id: int,
     data: schemas.PedidoUpdateConDetalles,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta_actual: Cuenta = Depends(get_current_account),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Actualizar un pedido con nuevos detalles (recalcula totales y ajusta stock)"""
+    _exigir_panel_interno(cuenta_actual)
     try:
-        from app.modules.auth.models import Cuenta
         from app.modules.pedidos.models import Persona
-        cuenta = service.db.query(Cuenta).filter(Cuenta.correo == current_user.email).first()
-        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta.id).first() if cuenta else None
+        persona = service.db.query(Persona).filter(Persona.cuenta_id == cuenta_actual.id).first()
         usuario_id = persona.id if persona else None
         
         update_data = {}
@@ -289,10 +343,11 @@ def actualizar_pedido_con_detalles(
 @router.delete("/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_pedido(
     pedido_id: int,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Eliminar un pedido. Si está PENDIENTE, devuelve el stock a los lotes."""
+    _exigir_panel_interno(cuenta)
     try:
         resultado = service.eliminar_pedido(pedido_id)
         if not resultado:
@@ -304,10 +359,12 @@ def eliminar_pedido(
 @router.get("/cliente/{cliente_persona_id}", response_model=List[schemas.PedidoResponse])
 def obtener_pedidos_cliente(
     cliente_persona_id: int,
-    current_user: TokenData = Depends(get_current_user_required),
+    cuenta: Cuenta = Depends(get_current_account),
+    db: Session = Depends(get_db),
     service: services.PedidoService = Depends(get_pedido_service)
 ):
     """Obtener pedidos de un cliente"""
+    _exigir_cliente_propio(db, cuenta, cliente_persona_id)
     return service.obtener_pedidos_cliente(cliente_persona_id)
 
 

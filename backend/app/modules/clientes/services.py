@@ -11,12 +11,14 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.modules.auth.models import Cuenta
 from app.modules.clientes import crud
 from app.modules.clientes.models import Cliente, Persona, TipoCliente
 from app.modules.clientes.schemas import (
     ClientePanelCreate,
     ClientePanelRead,
     ClientePanelUpdate,
+    ClientePerfilUpdate,
 )
 
 
@@ -52,6 +54,22 @@ class ClienteConPedidos(Exception):
         super().__init__(
             f"No se puede eliminar el cliente {cliente_id}: tiene pedidos asociados."
         )
+
+
+class CuentaSinCliente(Exception):
+    """La cuenta autenticada no está vinculada a ningún cliente."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "La cuenta no está vinculada a un cliente. Contactá al administrador."
+        )
+
+
+class AccesoPortalInvalido(Exception):
+    """Los datos para crear el acceso al portal están incompletos."""
+
+    def __init__(self, detalle: str) -> None:
+        super().__init__(detalle)
 
 
 def _dividir_nombre(nombre: str) -> tuple[str, str]:
@@ -131,10 +149,56 @@ def obtener_cliente(db: Session, cliente_id: int) -> ClientePanelRead:
     return _a_contrato(cliente, crud.kilos_comprados_de_cliente(db, cliente_id))
 
 
+def _crear_acceso_portal(
+    db: Session, correo: str, password: str
+) -> Cuenta:
+    """Crea la cuenta de portal para un cliente nuevo, sin confirmar."""
+    from app.modules.auth import services as auth_services
+
+    try:
+        return auth_services.crear_cuenta_vinculada(db, correo, password)
+    except ValueError as exc:
+        raise EmailDeClienteEnUso(correo) from exc
+
+
+def _sincronizar_correo_cuenta(
+    db: Session, persona: Persona, email: Optional[str]
+) -> None:
+    """Mantiene alineado el correo de la cuenta con el de la persona."""
+    if not persona.cuenta_id:
+        return
+
+    if not email:
+        raise AccesoPortalInvalido(
+            "El email no puede quedar vacío porque es el usuario de acceso."
+        )
+
+    if persona.email == email:
+        return
+
+    from app.modules.auth import crud as auth_crud
+
+    otra = auth_crud.get_user_by_email(db, email)
+    if otra is not None and otra.id != persona.cuenta_id:
+        raise EmailDeClienteEnUso(email)
+
+    if persona.cuenta is not None:
+        persona.cuenta.correo = email
+
+
 def crear_cliente(db: Session, datos: ClientePanelCreate) -> ClientePanelRead:
-    """Da de alta persona y cliente en una sola transacción."""
+    """Da de alta persona y cliente en una sola transacción.
+
+    Si ``datos.password`` viene informado, también crea la cuenta de portal
+    vinculada (rol ``Cliente``) para que el cliente pueda iniciar sesión.
+    """
     email = datos.email or None
     telefono = datos.telefono or None
+
+    if datos.password and not email:
+        raise AccesoPortalInvalido(
+            "Para crear el acceso al portal se requiere un email."
+        )
 
     _validar_unicidad(db, email, telefono)
 
@@ -162,6 +226,12 @@ def crear_cliente(db: Session, datos: ClientePanelCreate) -> ClientePanelRead:
             limite_credito=datos.limiteCredito,
         )
         db.add(cliente)
+        db.flush()
+
+        if datos.password:
+            cuenta = _crear_acceso_portal(db, email, datos.password)
+            persona.cuenta_id = cuenta.id
+
         db.commit()
         db.refresh(cliente)
     except Exception:
@@ -191,6 +261,7 @@ def actualizar_cliente(
             persona.nombre = nombre
             persona.apellido = apellido
         if datos.email is not None:
+            _sincronizar_correo_cuenta(db, persona, email)
             persona.email = email
         if datos.telefono is not None:
             persona.telefono = telefono
@@ -244,8 +315,65 @@ def ajustar_saldo_cuenta_corriente(
     return cliente.saldo_cuenta_corriente
 
 
+def cliente_id_de_cuenta(db: Session, cuenta: Cuenta) -> Optional[int]:
+    """Devuelve el ``persona_id`` del cliente vinculado, o ``None``."""
+    cliente = crud.obtener_cliente_por_cuenta(db, cuenta.id)
+    return cliente.persona_id if cliente is not None else None
+
+
+def obtener_cliente_por_cuenta(
+    db: Session, cuenta: Cuenta
+) -> ClientePanelRead:
+    """Devuelve el perfil del cliente vinculado a la cuenta autenticada."""
+    cliente = crud.obtener_cliente_por_cuenta(db, cuenta.id)
+    if cliente is None:
+        raise CuentaSinCliente()
+
+    return _a_contrato(cliente, crud.kilos_comprados_de_cliente(db, cliente.persona_id))
+
+
+def actualizar_cliente_por_cuenta(
+    db: Session, cuenta: Cuenta, datos: ClientePerfilUpdate
+) -> ClientePanelRead:
+    """Permite al cliente editar sus propios datos desde el portal."""
+    cliente = crud.obtener_cliente_por_cuenta(db, cuenta.id)
+    if cliente is None:
+        raise CuentaSinCliente()
+
+    persona = cliente.persona
+    email = datos.email if datos.email else None
+    telefono = datos.telefono if datos.telefono else None
+
+    _validar_unicidad(db, email, telefono, excluir_persona_id=persona.id)
+
+    try:
+        if datos.nombre is not None:
+            nombre, apellido = _dividir_nombre(datos.nombre)
+            persona.nombre = nombre
+            persona.apellido = apellido
+        if datos.email is not None:
+            _sincronizar_correo_cuenta(db, persona, email)
+            persona.email = email
+        if datos.telefono is not None:
+            persona.telefono = telefono
+        if datos.direccion is not None:
+            cliente.direccion_de_entrega = datos.direccion or None
+
+        db.commit()
+        db.refresh(cliente)
+    except Exception:
+        db.rollback()
+        raise
+
+    return _a_contrato(cliente, crud.kilos_comprados_de_cliente(db, cliente.persona_id))
+
+
 def eliminar_cliente(db: Session, cliente_id: int) -> None:
-    """Borra el cliente y su persona si no tiene pedidos asociados."""
+    """Borra el cliente y su persona si no tiene pedidos asociados.
+
+    Si la persona tiene una cuenta de portal, también se elimina la cuenta para
+    no dejar un login apuntando a un cliente inexistente.
+    """
     cliente = crud.obtener_cliente(db, cliente_id)
     if cliente is None:
         raise ClienteNoEncontrado(cliente_id)
@@ -255,10 +383,15 @@ def eliminar_cliente(db: Session, cliente_id: int) -> None:
 
     try:
         persona = cliente.persona
+        cuenta = persona.cuenta
         db.delete(cliente)
         db.flush()
         db.delete(persona)
+        db.flush()
+        if cuenta is not None:
+            db.delete(cuenta)
         db.commit()
     except Exception:
         db.rollback()
         raise
+

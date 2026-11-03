@@ -40,6 +40,17 @@ def obtener_persona_por_email(db: Session, email: str) -> Optional[Persona]:
     return db.query(Persona).filter(Persona.email == email).first()
 
 
+def obtener_cliente_por_cuenta(db: Session, cuenta_id: int) -> Optional[Cliente]:
+    """Devuelve el cliente vinculado a una cuenta de acceso, si existe."""
+    return (
+        db.query(Cliente)
+        .options(joinedload(Cliente.persona))
+        .join(Persona, Persona.id == Cliente.persona_id)
+        .filter(Persona.cuenta_id == cuenta_id)
+        .first()
+    )
+
+
 def obtener_persona_por_telefono(db: Session, telefono: str) -> Optional[Persona]:
     """Busca una persona por teléfono, para validar la unicidad."""
     return db.query(Persona).filter(Persona.telefono == telefono).first()

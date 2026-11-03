@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # -----------------------------------------------------------------------
+    # Tareas programadas (envíos)
+    # -----------------------------------------------------------------------
+    SCHEDULER_ENABLED: bool = False
+    SCHEDULER_HOUR: int = 6
+    SCHEDULER_MINUTE: int = 0
+    SCHEDULER_TIMEZONE: str = "America/Argentina/Buenos_Aires"
+
 
 # Instancia singleton para usar en toda la aplicación
 settings = Settings()
