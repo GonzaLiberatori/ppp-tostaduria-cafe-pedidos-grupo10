@@ -1,294 +1,272 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { useAuth } from './AuthContext'
-import { api } from '../services/api'
+import { mockOrdenesTueste, mockClientes, mockPedidos, mockGastos } from '../data/mockData'
+import { kilosPorTipo } from '../utils/cafes'
+import {
+  listarTiposDeCafe,
+  listarBlends,
+  listarTodosLosLotes,
+  crearTipoDeCafe,
+  actualizarTipoDeCafe,
+  eliminarTipoDeCafe,
+  crearBlend,
+  actualizarBlend,
+  eliminarBlend,
+  crearLote,
+  actualizarLote,
+  eliminarLote,
+} from '../api/inventario'
+import {
+  ensamblarCafes,
+  cafeSimpleToBackend,
+  cafeBlendToBackend,
+  loteToBackendCreate,
+  loteToBackendUpdate,
+} from '../api/mappers'
 
 const DataContext = createContext(null)
 
-// Estado inicial de "Por cobrar" mientras la API no responde o falla.
-const POR_COBRAR_VACIO = {
-  items: [],
-  total_por_cobrar: 0,
-  cantidad_vencidas: 0,
+const STORAGE_KEYS = {
+  CLIENTES: 'cafe-finca-clientes',
+  PEDIDOS: 'cafe-finca-pedidos',
+  GASTOS: 'cafe-finca-gastos',
 }
 
-function kilosDeStock(stockItem) {
-  if (!stockItem?.bolsas || !Array.isArray(stockItem.bolsas)) return 0
-  return stockItem.bolsas.reduce((sum, bolsa) => sum + (bolsa.kilos || 0), 0)
+function loadFromStorage(key, fallback) {
+  try {
+    const stored = localStorage.getItem(key)
+    return stored ? JSON.parse(stored) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveToStorage(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify(data))
+  } catch (error) {
+    console.error(`Error guardando ${key}:`, error)
+  }
+}
+
+// Consumo FIFO: primero lotes abiertos, luego cerrados, ambos por antigüedad.
+// Solo se descuentan lotes de café tostado (producto terminado).
+function consumirLotesFIFO(lotes = [], kilosAConsumir) {
+  const ordenados = lotes
+    .filter(lote => lote.tipo === 'tostado')
+    .sort((a, b) => {
+      if (a.estado === 'abierto' && b.estado === 'cerrado') return -1
+      if (a.estado === 'cerrado' && b.estado === 'abierto') return 1
+      return new Date(a.fechaCreacion) - new Date(b.fechaCreacion)
+    })
+
+  let restantes = kilosAConsumir
+  const consumo = []
+  const nuevasLotes = lotes.map(l => ({ ...l }))
+
+  for (const lote of ordenados) {
+    if (restantes <= 0) break
+    const idx = nuevasLotes.findIndex(l => l.id === lote.id)
+    if (idx === -1) continue
+
+    const disponible = nuevasLotes[idx].kilos || 0
+    const consumir = Math.min(disponible, restantes)
+
+    if (consumir > 0) {
+      nuevasLotes[idx].kilos = disponible - consumir
+      if (nuevasLotes[idx].estado === 'cerrado') {
+        nuevasLotes[idx].estado = 'abierto'
+      }
+      consumo.push({ loteId: lote.id, consumido: consumir })
+      restantes -= consumir
+    }
+  }
+
+  const lotesFinales = nuevasLotes.filter(l => (l.kilos || 0) > 0.001)
+
+  return { lotes: lotesFinales, consumo, faltante: Math.max(restantes, 0) }
 }
 
 export function DataProvider({ children }) {
-  const { user } = useAuth()
-  const [stock, setStock] = useState([])
-  const [clientes, setClientes] = useState([])
-  const [pedidos, setPedidos] = useState([])
-  const [gastos, setGastos] = useState([])
-  const [ventas, setVentas] = useState([])
-  const [resumenVentasMensual, setResumenVentasMensual] = useState([])
-  const [cobranzaMensual, setCobranzaMensual] = useState([])
-  const [porCobrar, setPorCobrar] = useState(POR_COBRAR_VACIO)
-  const [isLoaded, setIsLoaded] = useState(false)
-  const [loading, setLoading] = useState({})
-  const [errors, setErrors] = useState({})
+  const [cafes, setCafes] = useState([])
+  const [clientes, setClientes] = useState(() => loadFromStorage(STORAGE_KEYS.CLIENTES, mockClientes))
+  const [pedidos, setPedidos] = useState(() => loadFromStorage(STORAGE_KEYS.PEDIDOS, mockPedidos))
+  const [gastos, setGastos] = useState(() => loadFromStorage(STORAGE_KEYS.GASTOS, mockGastos))
+  const [ordenesTueste] = useState(mockOrdenesTueste)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
-  // Carga inicial: solo con una sesión activa y sin datos de ejemplo.
-  useEffect(() => {
-    let activo = true
-
-    if (!user) {
-      setStock([])
-      setClientes([])
-      setPedidos([])
-      setGastos([])
-      setVentas([])
-      setResumenVentasMensual([])
-      setCobranzaMensual([])
-      setPorCobrar(POR_COBRAR_VACIO)
-      setErrors({})
-      setIsLoaded(false)
-      return () => {
-        activo = false
-      }
-    }
-
-    async function cargarTodo() {
-      setIsLoaded(false)
-      setLoading(prev => ({ ...prev, initial: true }))
-      setErrors({})
-
-      // El portal del cliente no necesita el padrón completo ni los gastos:
-      // se limita a su propio perfil y a sus pedidos.
-      const esCliente = user.role === 'cliente'
-      const tieneCliente = Boolean(user.clienteId)
-
-      const pedidosPromise = esCliente
-        ? (tieneCliente ? api.getPedidosByCliente(user.clienteId) : Promise.resolve([]))
-        : api.getPedidos()
-      const clientesPromise = esCliente
-        ? (tieneCliente
-          ? api.getCliente(user.clienteId).then(cliente => [cliente])
-          : Promise.resolve([]))
-        : api.getClientes()
-      const gastosPromise = esCliente ? Promise.resolve([]) : api.getGastos()
-
-      // Las ventas alimentan Contabilidad. Si la base no tiene la migración
-      // 003_ventas, el endpoint falla: se aísla para que el resto del panel
-      // siga cargando y Contabilidad muestre un aviso.
-      let errorContabilidad = null
-      const ventasPromise = esCliente
-        ? Promise.resolve([])
-        : api.getVentas({ limit: 100 }).catch(error => {
-          errorContabilidad = error.message
-          return []
-        })
-      const resumenVentasPromise = esCliente
-        ? Promise.resolve([])
-        : api.getResumenMensualVentas().catch(error => {
-          errorContabilidad = errorContabilidad || error.message
-          return []
-        })
-      const cobranzaPromise = esCliente
-        ? Promise.resolve([])
-        : api.getCobranzaMensualVentas().catch(error => {
-          errorContabilidad = errorContabilidad || error.message
-          return []
-        })
-      const porCobrarPromise = esCliente
-        ? Promise.resolve(POR_COBRAR_VACIO)
-        : api.getPorCobrarVentas().catch(error => {
-          errorContabilidad = errorContabilidad || error.message
-          return POR_COBRAR_VACIO
-        })
-
-      try {
-        const [
-          stockRes,
-          clientesRes,
-          pedidosRes,
-          gastosRes,
-          ventasRes,
-          resumenVentasRes,
-          cobranzaRes,
-          porCobrarRes,
-        ] = await Promise.all([
-          api.getStock(),
-          clientesPromise,
-          pedidosPromise,
-          gastosPromise,
-          ventasPromise,
-          resumenVentasPromise,
-          cobranzaPromise,
-          porCobrarPromise,
-        ])
-
-        if (!activo) return
-        setStock(stockRes || [])
-        setClientes(clientesRes || [])
-        setPedidos(pedidosRes || [])
-        setGastos(gastosRes || [])
-        setVentas(ventasRes || [])
-        setResumenVentasMensual(resumenVentasRes || [])
-        setCobranzaMensual(cobranzaRes || [])
-        setPorCobrar(porCobrarRes || POR_COBRAR_VACIO)
-        if (errorContabilidad) {
-          setErrors(prev => ({ ...prev, contabilidad: errorContabilidad }))
-        }
-      } catch (error) {
-        if (!activo) return
-        console.error('Error cargando datos del panel:', error)
-        setErrors(prev => ({ ...prev, initial: error.message }))
-      } finally {
-        if (activo) {
-          setIsLoaded(true)
-          setLoading(prev => ({ ...prev, initial: false }))
-        }
-      }
-    }
-
-    cargarTodo()
-    return () => {
-      activo = false
-    }
-  }, [user?.id])
-
-  // --- Helpers ---
-  const withLoading = useCallback((key, fn) => async (...args) => {
-    setLoading(prev => ({ ...prev, [key]: true }))
-    setErrors(prev => ({ ...prev, [key]: null }))
+  // Cargar inventario desde la API al montar
+  const cargarInventario = useCallback(async () => {
     try {
-      return await fn(...args)
-    } catch (error) {
-      setErrors(prev => ({ ...prev, [key]: error.message }))
-      throw error
-    } finally {
-      setLoading(prev => ({ ...prev, [key]: false }))
-    }
-  }, [])
-
-  const refrescarStockSilencioso = useCallback(async () => {
-    try {
-      const respuesta = await api.getStock()
-      setStock(respuesta || [])
-    } catch (error) {
-      console.warn('No se pudo refrescar el stock:', error)
-    }
-  }, [])
-
-  const refrescarClientesSilencioso = useCallback(async () => {
-    // Los clientes solo ven su propio perfil; no se recarga el padrón completo.
-    if (user?.role === 'cliente') return
-    try {
-      const respuesta = await api.getClientes()
-      setClientes(respuesta || [])
-    } catch (error) {
-      console.warn('No se pudo refrescar los clientes:', error)
-    }
-  }, [user?.role])
-
-  const refrescarStockYClientes = useCallback(async () => {
-    await Promise.all([refrescarStockSilencioso(), refrescarClientesSilencioso()])
-  }, [refrescarStockSilencioso, refrescarClientesSilencioso])
-
-  // --- Ventas (contabilidad) ---
-  const refrescarVentas = useCallback(async () => {
-    if (user?.role === 'cliente') return
-    try {
-      const [ventasRes, resumenRes, cobranzaRes, porCobrarRes] = await Promise.all([
-        api.getVentas({ limit: 100 }),
-        api.getResumenMensualVentas(),
-        api.getCobranzaMensualVentas(),
-        api.getPorCobrarVentas(),
+      setLoading(true)
+      setError(null)
+      
+      // 1. Cargar tipos de café y blends en paralelo
+      const [tiposDeCafe, blends] = await Promise.all([
+        listarTiposDeCafe(),
+        listarBlends(),
       ])
-      setVentas(ventasRes || [])
-      setResumenVentasMensual(resumenRes || [])
-      setCobranzaMensual(cobranzaRes || [])
-      setPorCobrar(porCobrarRes || POR_COBRAR_VACIO)
-      setErrors(prev => ({ ...prev, contabilidad: null }))
-    } catch (error) {
-      setErrors(prev => ({ ...prev, contabilidad: error.message }))
-      throw error
+
+      // 2. Cargar lotes para cada tipo de café y blend
+      // El backend requiere XOR: tipo_de_cafe_id o blend_id, no ambos ni ninguno
+      const todosLosLotes = []
+      
+      for (const tipo of tiposDeCafe) {
+        try {
+          const lotesDelTipo = await listarTodosLosLotes([tipo], [])
+          todosLosLotes.push(...lotesDelTipo)
+        } catch (err) {
+          console.error(`Error cargando lotes para tipo ${tipo.id}:`, err)
+        }
+      }
+
+      for (const blend of blends) {
+        try {
+          const lotesDelBlend = await listarTodosLosLotes([], [blend])
+          todosLosLotes.push(...lotesDelBlend)
+        } catch (err) {
+          console.error(`Error cargando lotes para blend ${blend.id}:`, err)
+        }
+      }
+
+      // 3. Ensamblar cafés unificados
+      const cafesUnificados = ensamblarCafes(tiposDeCafe, blends, todosLosLotes)
+      setCafes(cafesUnificados)
+    } catch (err) {
+      console.error('Error cargando inventario:', err)
+      setError(err.message || 'Error al cargar el inventario')
+    } finally {
+      setLoading(false)
     }
-  }, [user?.role])
+  }, [])
 
-  // --- Stock ---
-  const addStock = withLoading('stock', async (item) => {
-    const nuevo = await api.createStock(item)
-    setStock(prev => [nuevo, ...prev.filter(stockItem => stockItem.id !== nuevo.id)])
-    return nuevo
-  })
+  useEffect(() => {
+    cargarInventario()
+  }, [cargarInventario])
 
-  const updateStock = withLoading('stock', async (id, cambios) => {
-    const actualizado = await api.updateStock(id, cambios)
-    setStock(prev => prev.map(item => item.id === id ? actualizado : item))
-    return actualizado
-  })
+  // Guardar en localStorage solo clientes, pedidos, gastos
+  useEffect(() => { saveToStorage(STORAGE_KEYS.CLIENTES, clientes) }, [clientes])
+  useEffect(() => { saveToStorage(STORAGE_KEYS.PEDIDOS, pedidos) }, [pedidos])
+  useEffect(() => { saveToStorage(STORAGE_KEYS.GASTOS, gastos) }, [gastos])
 
-  const deleteStock = withLoading('stock', async (id) => {
-    await api.deleteStock(id)
-    setStock(prev => prev.filter(item => item.id !== id))
-  })
-
-  // --- Bolsas ---
-  const addBolsa = withLoading('stock', async (stockId, bolsa) => {
+  // --- Café Actions ---
+  const addCafe = useCallback(async (cafe) => {
     try {
-      const nueva = await api.addBolsa(stockId, bolsa)
-      setStock(prev => prev.map(item => (
-        item.id === stockId
-          ? { ...item, bolsas: [...(item.bolsas || []), nueva] }
-          : item
-      )))
-      return nueva
-    } catch (error) {
-      await refrescarStockSilencioso()
-      throw error
-    }
-  })
+      let response
+      if (cafe.tipoProducto === 'simple') {
+        const payload = cafeSimpleToBackend(cafe)
+        response = await crearTipoDeCafe(payload)
+      } else {
+        const payload = cafeBlendToBackend(cafe)
+        response = await crearBlend(payload)
+      }
 
-  const updateBolsa = withLoading('stock', async (stockId, bolsaId, cambios) => {
+      // Recargar inventario para obtener los datos actualizados
+      await cargarInventario()
+      
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cargarInventario])
+
+  const updateCafe = useCallback(async (id, updates) => {
     try {
-      const actualizada = await api.updateBolsa(stockId, bolsaId, cambios)
-      setStock(prev => prev.map(item => (
-        item.id === stockId
-          ? {
-            ...item,
-            bolsas: (item.bolsas || []).map(bolsa => (
-              bolsa.id === bolsaId ? actualizada : bolsa
-            )),
-          }
-          : item
-      )))
-      return actualizada
-    } catch (error) {
-      await refrescarStockSilencioso()
-      throw error
-    }
-  })
+      const cafe = cafes.find(c => c.id === id)
+      if (!cafe) throw new Error('Café no encontrado')
 
-  const deleteBolsa = withLoading('stock', async (stockId, bolsaId) => {
+      let response
+      if (cafe.tipoProducto === 'simple') {
+        const payload = cafeSimpleToBackend({ ...cafe, ...updates })
+        response = await actualizarTipoDeCafe(id, payload)
+      } else {
+        const payload = cafeBlendToBackend({ ...cafe, ...updates })
+        response = await actualizarBlend(id, payload)
+      }
+
+      await cargarInventario()
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cafes, cargarInventario])
+
+  const deleteCafe = useCallback(async (id) => {
     try {
-      await api.deleteBolsa(stockId, bolsaId)
-      setStock(prev => prev.map(item => (
-        item.id === stockId
-          ? { ...item, bolsas: (item.bolsas || []).filter(bolsa => bolsa.id !== bolsaId) }
-          : item
-      )))
-    } catch (error) {
-      await refrescarStockSilencioso()
-      throw error
+      const cafe = cafes.find(c => c.id === id)
+      if (!cafe) throw new Error('Café no encontrado')
+
+      if (cafe.tipoProducto === 'simple') {
+        await eliminarTipoDeCafe(id)
+      } else {
+        await eliminarBlend(id)
+      }
+
+      await cargarInventario()
+    } catch (err) {
+      throw err
     }
-  })
+  }, [cafes, cargarInventario])
 
-  // --- Clientes ---
-  const addCliente = withLoading('clientes', async (cliente) => {
-    const nuevo = await api.createCliente(cliente)
-    setClientes(prev => [nuevo, ...prev.filter(item => item.id !== nuevo.id)])
-    return nuevo
-  })
+  // --- Lote Actions ---
+  const addLote = useCallback(async (cafeId, lote) => {
+    try {
+      const cafePadre = cafes.find(c => c.id === cafeId)
+      if (!cafePadre) throw new Error('Café padre no encontrado')
 
-  const updateCliente = withLoading('clientes', async (id, cambios) => {
-    const actualizado = await api.updateCliente(id, cambios)
-    setClientes(prev => prev.map(item => item.id === id ? actualizado : item))
-    return actualizado
-  })
+      const payload = loteToBackendCreate(lote, cafePadre)
+      const response = await crearLote(payload)
+
+      await cargarInventario()
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cafes, cargarInventario])
+
+  const updateLote = useCallback(async (cafeId, loteId, updates) => {
+    try {
+      const payload = loteToBackendUpdate(updates)
+      const response = await actualizarLote(loteId, payload)
+
+      await cargarInventario()
+      return response
+    } catch (err) {
+      throw err
+    }
+  }, [cargarInventario])
+
+  const deleteLote = useCallback(async (cafeId, loteId) => {
+    try {
+      await eliminarLote(loteId)
+      await cargarInventario()
+    } catch (err) {
+      throw err
+    }
+  }, [cargarInventario])
+
+  // --- Consumo de stock (ventas) ---
+  const previewConsumoFIFO = useCallback((cafeId, kilos) => {
+    const cafe = cafes.find(c => c.id === cafeId)
+    if (!cafe) return { consumo: [], faltante: kilos }
+    const { consumo, faltante } = consumirLotesFIFO(cafe.lotes || [], kilos)
+    return { consumo, faltante }
+  }, [cafes])
+
+  const consumirStockFIFO = useCallback((cafeId, kilos) => {
+    const cafe = cafes.find(c => c.id === cafeId)
+    if (!cafe) return { consumo: [], faltante: kilos }
+    const { lotes, consumo, faltante } = consumirLotesFIFO(cafe.lotes || [], kilos)
+    setCafes(prev => prev.map(c => (c.id === cafeId ? { ...c, lotes } : c)))
+    return { consumo, faltante }
+  }, [])
+
+  // --- Cliente Actions ---
+  const addCliente = useCallback((cliente) => {
+    const newCliente = { ...cliente, id: cliente.id || crypto.randomUUID(), creadoEn: new Date().toISOString() }
+    setClientes(prev => [...prev, newCliente])
+    return newCliente
+  }, [])
 
   const deleteCliente = withLoading('clientes', async (id) => {
     await api.deleteCliente(id)
@@ -356,45 +334,44 @@ export function DataProvider({ children }) {
     return venta
   })
 
-  const anularVenta = withLoading('ventas', async (id, motivo) => {
-    const anulada = await api.anularVenta(id, motivo)
-    await refrescarVentas()
-    await refrescarClientesSilencioso()
-    return anulada
-  })
+  const getCafeById = useCallback((id) => {
+    return cafes.find(c => c.id === id)
+  }, [cafes])
+
+  const getCafesByTipoProducto = useCallback((tipoProducto) => {
+    return cafes.filter(c => c.tipoProducto === tipoProducto)
+  }, [cafes])
+
+  const getKilosPorTipo = useCallback((cafe, tipo) => {
+    return kilosPorTipo(cafe?.lotes || [], tipo)
+  }, [])
+
+  const getTotalKilosPorTipo = useCallback((tipo) => {
+    return cafes.reduce((sum, cafe) => sum + kilosPorTipo(cafe.lotes || [], tipo), 0)
+  }, [cafes])
+
+  const getCafesConTostado = useCallback(() => {
+    return cafes.filter(cafe => kilosPorTipo(cafe.lotes || [], 'tostado') > 0)
+  }, [cafes])
+
+  const getLotesByEstado = useCallback((cafeId, estado) => {
+    const cafe = cafes.find(c => c.id === cafeId)
+    if (!cafe) return []
+    return (cafe.lotes || []).filter(lote => lote.estado === estado)
+  }, [cafes])
+
+  const getOrdenTuesteById = useCallback((id) => {
+    return ordenesTueste.find(orden => orden.id === id)
+  }, [ordenesTueste])
 
   // --- Consultas derivadas ---
   const getClienteById = useCallback((id) => (
     clientes.find(cliente => String(cliente.id) === String(id))
   ), [clientes])
 
-  const getStockById = useCallback((id) => (
-    stock.find(item => item.id === id)
-  ), [stock])
-
-  const getPedidosByCliente = useCallback((clienteId) => (
-    pedidos.filter(pedido => String(pedido.clienteId) === String(clienteId))
-  ), [pedidos])
-
-  const getStockByTipo = useCallback((tipo) => (
-    stock.filter(item => item.tipo === tipo)
-  ), [stock])
-
-  const getTotalKilosStock = useCallback((tipo) => (
-    stock
-      .filter(item => item.tipo === tipo)
-      .reduce((sum, item) => sum + kilosDeStock(item), 0)
-  ), [stock])
-
-  const getBolsasByEstado = useCallback((stockId, estado) => {
-    const item = stock.find(stockItem => stockItem.id === stockId)
-    if (!item) return []
-    return (item.bolsas || []).filter(bolsa => bolsa.estado === estado)
-  }, [stock])
-
-  const getClientesConDeuda = useCallback(() => (
-    clientes.filter(cliente => cliente.tieneDeuda && cliente.montoDeuda > 0)
-  ), [clientes])
+  const getClientesConDeuda = useCallback(() => {
+    return clientes.filter(c => c.tieneDeuda && c.montoDeuda > 0)
+  }, [clientes])
 
   const getPedidosByEstado = useCallback((estado) => (
     pedidos.filter(pedido => pedido.estado === estado)
@@ -432,41 +409,42 @@ export function DataProvider({ children }) {
   const getTotalesGenerales = useCallback(() => {
     const contabilidad = getContabilidadMensual()
     return {
-      ventasTotales: contabilidad.reduce((sum, mes) => sum + mes.ventasTotales, 0),
-      gastosTotales: contabilidad.reduce((sum, mes) => sum + mes.gastosTotales, 0),
-      gananciaNeta: contabilidad.reduce((sum, mes) => sum + mes.gananciaNeta, 0),
-      totalKilosVerdes: getTotalKilosStock('verde'),
-      totalKilosTostados: getTotalKilosStock('tostado'),
+      ventasTotales: contabilidad.reduce((sum, m) => sum + m.ventasTotales, 0),
+      gastosTotales: contabilidad.reduce((sum, m) => sum + m.gastosTotales, 0),
+      gananciaNeta: contabilidad.reduce((sum, m) => sum + m.gananciaNeta, 0),
+      totalKilosVerdes: getTotalKilosPorTipo('verde'),
+      totalKilosTostados: getTotalKilosPorTipo('tostado'),
       clientesConDeuda: getClientesConDeuda().length,
       pedidosPendientes: getPedidosByEstado('Pendiente').length,
     }
-  }, [getContabilidadMensual, getTotalKilosStock, getClientesConDeuda, getPedidosByEstado])
+  }, [getContabilidadMensual, getTotalKilosPorTipo, getClientesConDeuda, getPedidosByEstado])
 
   const value = {
-    // Estado
-    stock,
+    // State
+    cafes,
+    ordenesTueste,
     clientes,
     pedidos,
     gastos,
-    isLoaded,
     loading,
-    errors,
-
-    // Stock
-    addStock,
-    updateStock,
-    deleteStock,
-    getStockById,
-    getStockByTipo,
-    getTotalKilosStock,
-    kilosDeStock,
-
-    // Bolsas
-    addBolsa,
-    updateBolsa,
-    deleteBolsa,
-    getBolsasByEstado,
-
+    error,
+    // Cafés
+    addCafe,
+    updateCafe,
+    deleteCafe,
+    getCafeById,
+    getCafesByTipoProducto,
+    getKilosPorTipo,
+    getTotalKilosPorTipo,
+    getCafesConTostado,
+    // Lotes
+    addLote,
+    updateLote,
+    deleteLote,
+    getLotesByEstado,
+    getOrdenTuesteById,
+    previewConsumoFIFO,
+    consumirStockFIFO,
     // Clientes
     addCliente,
     updateCliente,
@@ -499,6 +477,8 @@ export function DataProvider({ children }) {
     // Contabilidad
     getContabilidadMensual,
     getTotalesGenerales,
+    // Refresh
+    cargarInventario,
   }
 
   return (

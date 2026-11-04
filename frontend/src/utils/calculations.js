@@ -3,6 +3,7 @@ export function calcularTotalPedido(items) {
 }
 
 export function calcularKilosTotales(items) {
+  if (!items) return 0
   return items.reduce((sum, item) => sum + (item.kilos || 0), 0)
 }
 

@@ -10,15 +10,15 @@ import {
 } from 'lucide-react'
 import Badge from '../components/ui/Badge'
 import { formatearMoneda, formatearKilos, getMesNombre } from '../utils/formatters'
-import { calcularTotalPedido, calcularKilosTotales } from '../utils/calculations'
+import { kilosCafe } from '../utils/cafes'
 
 export default function Dashboard() {
   const { 
-    stock, 
+    cafes, 
     clientes, 
     pedidos, 
     gastos, 
-    getTotalKilosStock, 
+    getTotalKilosPorTipo, 
     getClientesConDeuda, 
     getPedidosByEstado,
     getTotalesGenerales,
@@ -30,16 +30,16 @@ export default function Dashboard() {
   const pedidosPendientes = getPedidosByEstado('Pendiente')
   const pedidosListos = getPedidosByEstado('Listo')
   const clientesConDeuda = getClientesConDeuda()
-  const stockVerde = getTotalKilosStock('verde')
-  const stockTostado = getTotalKilosStock('tostado')
+  const stockVerde = getTotalKilosPorTipo('verde')
+  const stockTostado = getTotalKilosPorTipo('tostado')
 
-  function getKilosItem(item) {
-    if (!item.bolsas || !Array.isArray(item.bolsas)) return 0
-    return item.bolsas.reduce((sum, b) => sum + (b.kilos || 0), 0)
-  }
-
-  const stockBajo = stock.filter(s => getKilosItem(s) < 20 && s.tipo === 'tostado')
-  const stockVerdeBajo = stock.filter(s => getKilosItem(s) < 50 && s.tipo === 'verde')
+  // Cafés con lotes de cada tipo por debajo del mínimo operativo
+  const stockBajo = cafes.filter(cafe =>
+    (cafe.lotes || []).some(l => l.tipo === 'tostado') && kilosCafe(cafe, 'tostado') < 5
+  )
+  const stockVerdeBajo = cafes.filter(cafe =>
+    (cafe.lotes || []).some(l => l.tipo === 'verde') && kilosCafe(cafe, 'verde') < 30
+  )
 
   function getContabilidadMesActual() {
     const mesActual = new Date().toISOString().substring(0, 7)

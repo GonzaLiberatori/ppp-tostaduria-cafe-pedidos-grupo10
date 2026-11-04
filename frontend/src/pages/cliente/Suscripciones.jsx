@@ -1,15 +1,17 @@
-import { useMemo, useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useData } from '../../context/DataContext'
 import { useAuth } from '../../context/AuthContext'
 import { FRECUENCIA_SUSCRIPCION, MEDIOS_PAGO } from '../../data/constants'
 import { formatearMoneda, formatearKilos } from '../../utils/formatters'
+import { formatearFecha } from '../../utils/formatters'
+import { nombreCafe, kilosCafe } from '../../utils/cafes'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import { Clock, Package, AlertTriangle } from 'lucide-react'
 
 export default function Suscripciones() {
-  const { addPedido, stock, kilosDeStock } = useData()
+  const { addPedido, cafes } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
@@ -21,7 +23,7 @@ export default function Suscripciones() {
   )
 
   const [formData, setFormData] = useState({
-    stockId: '',
+    cafeId: '',
     kilos: '',
     frecuencia: 'semanal',
     medioPago: 'transferencia',
@@ -32,17 +34,15 @@ export default function Suscripciones() {
   const [submitError, setSubmitError] = useState('')
   const [enviado, setEnviado] = useState(false)
 
-  const stockSeleccionado = cafesDisponibles.find(item => item.id === formData.stockId)
-  const disponible = stockSeleccionado ? kilosDeStock(stockSeleccionado) : 0
+  const clienteId = user?.clienteId
 
-  const etiquetaFrecuencia = FRECUENCIA_SUSCRIPCION
-    .find(opcion => opcion.value === formData.frecuencia)?.label
-  const etiquetaPago = MEDIOS_PAGO
-    .find(opcion => opcion.value === formData.medioPago)?.label
+  // Solo cafés con café tostado disponible para entregas recurrentes
+  const cafesDisponibles = useMemo(
+    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
+    [cafes]
+  )
 
-  const totalEstimado = stockSeleccionado && formData.kilos
-    ? parseFloat(formData.kilos) * stockSeleccionado.precioKg
-    : 0
+  const cafeSeleccionado = cafes.find(c => c.id === formData.cafeId)
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -52,15 +52,10 @@ export default function Suscripciones() {
 
   const validate = () => {
     const newErrors = {}
-
-    if (!clienteId) newErrors.cliente = 'La cuenta no está vinculada a un cliente.'
-    if (!formData.stockId) newErrors.stockId = 'Selecciona un café tostado'
-
-    const kilos = parseFloat(formData.kilos)
-    if (!formData.kilos || Number.isNaN(kilos) || kilos <= 0) {
-      newErrors.kilos = 'Kilos inválidos'
-    } else if (kilos > disponible + 0.001) {
-      newErrors.kilos = `Stock insuficiente (disponible: ${formatearKilos(disponible)})`
+    if (!formData.cafeId) newErrors.cafeId = 'Selecciona un tipo de café'
+    if (!formData.kilos || parseFloat(formData.kilos) <= 0) newErrors.kilos = 'Kilos inválidos'
+    if (formData.medioPago === 'transferencia' && !formData.comprobante) {
+      newErrors.comprobante = 'Debe adjuntar el comprobante de transferencia'
     }
 
     setErrors(newErrors)
@@ -74,12 +69,9 @@ export default function Suscripciones() {
     setSubmitting(true)
     setSubmitError('')
 
-    const notas = formData.observaciones.trim()
-    const observaciones = [
-      `Suscripción ${etiquetaFrecuencia || formData.frecuencia}`,
-      `Pago: ${etiquetaPago || formData.medioPago}`,
-      notas,
-    ].filter(Boolean).join(' | ')
+    const kilos = parseFloat(formData.kilos)
+    const precioKg = cafeSeleccionado?.precioKg || 0
+    const total = kilos * precioKg
 
     const pedido = {
       clienteId: String(clienteId),
@@ -88,8 +80,10 @@ export default function Suscripciones() {
       observaciones,
       items: [
         {
-          stockId: formData.stockId,
-          kilos: parseFloat(formData.kilos),
+          cafeId: formData.cafeId,
+          nombre: nombreCafe(cafeSeleccionado),
+          kilos,
+          precioKg,
         },
       ],
     }
@@ -134,7 +128,7 @@ export default function Suscripciones() {
           <div className="grid gap-4 sm:grid-cols-2 text-left">
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Café</p>
-              <p className="font-medium">{stockSeleccionado?.variedad || '—'}</p>
+              <p className="font-medium">{nombreCafe(cafeSeleccionado) || '—'}</p>
             </div>
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Kilos por entrega</p>
@@ -178,40 +172,58 @@ export default function Suscripciones() {
         </div>
       </div>
 
-      <div className="card p-6 max-w-2xl">
+      <div className="card p-6 max-w-2xl mx-auto">
         <h2 className="font-semibold text-[var(--color-text-primary)] mb-6">Nueva suscripción</h2>
         <form onSubmit={handleSubmit} className="space-y-5">
-          {cafesDisponibles.length === 0 ? (
-            <div className="p-4 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-secondary)]">
-              No hay café tostado con stock disponible en este momento.
-            </div>
-          ) : (
-            <>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Select
-                  label="Café tostado *"
-                  name="stockId"
-                  value={formData.stockId}
-                  onChange={handleChange}
-                  options={cafesDisponibles.map(item => ({
-                    value: item.id,
-                    label: `${item.variedad} (${formatearKilos(kilosDeStock(item))} disp.)`,
-                  }))}
-                  placeholder="Seleccionar café"
-                  error={errors.stockId}
-                />
-                <Input
-                  label="Kilos por entrega *"
-                  name="kilos"
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  max={disponible || undefined}
-                  value={formData.kilos}
-                  onChange={handleChange}
-                  placeholder="Ej: 5"
-                  error={errors.kilos}
-                />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Select
+              label="Tipo de café *"
+              name="cafeId"
+              value={formData.cafeId}
+              onChange={handleChange}
+              options={cafesDisponibles.map(cafe => ({
+                value: cafe.id,
+                label: `${nombreCafe(cafe)} (${formatearKilos(kilosCafe(cafe, 'tostado'))} disp.)`,
+              }))}
+              placeholder="Seleccionar café"
+              error={errors.cafeId}
+            />
+            <Input
+              label="Kilos por entrega *"
+              name="kilos"
+              type="number"
+              step="0.01"
+              min="0.01"
+              value={formData.kilos}
+              onChange={handleChange}
+              placeholder="Ej: 5"
+              error={errors.kilos}
+            />
+          </div>
+
+          <Select
+            label="Frecuencia *"
+            name="frecuencia"
+            value={formData.frecuencia}
+            onChange={handleChange}
+            options={FRECUENCIA_SUSCRIPCION}
+            placeholder="Seleccionar frecuencia"
+          />
+
+          <Select
+            label="Medio de pago *"
+            name="medioPago"
+            value={formData.medioPago}
+            onChange={handleChange}
+            options={MEDIOS_PAGO}
+            placeholder="Seleccionar medio de pago"
+          />
+
+          {formData.medioPago === 'transferencia' && (
+            <div className="border border-amber-500/20 bg-amber-500/5 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span className="font-medium text-amber-800">Comprobante obligatorio</span>
               </div>
 
               <Select
@@ -273,6 +285,56 @@ export default function Suscripciones() {
               </Button>
             </>
           )}
+
+          {formData.medioPago === 'efectivo' && (
+            <div className="border border-blue-500/20 bg-blue-500/5 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Clock className="w-4 h-4 text-blue-600" />
+                <span className="font-medium text-blue-800">Ticket opcional</span>
+              </div>
+              <p className="text-sm text-blue-700 mb-3">
+                Puedes adjuntar el ticket de pago si lo deseas, pero no es obligatorio.
+              </p>
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-[var(--color-text-muted)] file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-coffee-500 file:text-white hover:file:bg-coffee-600"
+              />
+            </div>
+          )}
+
+          <Input
+            label="Observaciones"
+            name="observaciones"
+            value={formData.observaciones}
+            onChange={handleChange}
+            placeholder="Notas adicionales..."
+            multiline
+            rows={2}
+          />
+
+          <div className="bg-coffee-500/5 border border-coffee-500/20 rounded-lg p-4 mt-2">
+            <div className="grid gap-2 sm:grid-cols-3 text-sm">
+              <div>
+                <span className="text-[var(--color-text-secondary)]">Total estimado:</span>
+                <span className="font-medium text-[var(--color-text-primary)] ml-2">
+                  {formData.cafeId && formData.kilos
+                    ? formatearMoneda(parseFloat(formData.kilos) * (cafeSeleccionado?.precioKg || 0))
+                    : formatearMoneda(0)}
+                </span>
+              </div>
+              <div>
+                <span className="text-[var(--color-text-secondary)]">Estado:</span>
+                <span className="font-medium text-[var(--color-text-primary)] ml-2">Pendiente de aprobación</span>
+              </div>
+            </div>
+          </div>
+
+          <Button type="submit" variant="primary" loading={submitting} className="w-full py-3">
+            <Clock className="w-4 h-4 mr-2" />
+            Solicitar suscripción
+          </Button>
         </form>
       </div>
     </div>

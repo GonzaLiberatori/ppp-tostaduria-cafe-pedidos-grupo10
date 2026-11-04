@@ -6,6 +6,7 @@ import { ToastProvider, Toaster } from './hooks/useToast.jsx'
 import Layout from './components/layout/Layout'
 import LayoutCliente from './components/layout/LayoutCliente'
 import Login from './pages/Login'
+import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Stock from './pages/Stock'
 import Clientes from './pages/Clientes'
@@ -47,10 +48,19 @@ function ProtectedRoute({ children, allowedRoles }) {
 
 function PublicRoute({ children }) {
   const { user, loading } = useAuth()
-
-  if (loading) return <PantallaCarga />
-  if (user) return <Navigate to={rutaInicio(user.role)} replace />
-
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg-primary)]">
+        <div className="w-8 h-8 border-4 border-coffee-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+  
+  if (user) {
+    return <Navigate to={user.role === 'cliente' ? '/cliente' : '/'} replace />
+  }
+  
   return children
 }
 
@@ -63,6 +73,12 @@ function AppRoutes() {
         </PublicRoute>
       } />
 
+      <Route path="/register" element={
+        <PublicRoute>
+          <Register />
+        </PublicRoute>
+      } />
+      
       <Route element={<Layout />}>
         <Route path="/" element={
           <ProtectedRoute allowedRoles={['admin', 'empleado', 'vendedor']}>
