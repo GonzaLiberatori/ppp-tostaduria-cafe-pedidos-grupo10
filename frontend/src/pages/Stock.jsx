@@ -16,6 +16,9 @@ export default function Stock() {
   const {
     cafes,
     ordenesTueste,
+    loading,
+    error,
+    cargarInventario,
     addCafe,
     updateCafe,
     deleteCafe,
@@ -34,6 +37,7 @@ export default function Stock() {
   const [filters, setFilters] = useState({ tipoProducto: '', tipoLote: '', search: '' })
   const [deleteCafeConfirm, setDeleteCafeConfirm] = useState(null)
   const [deleteLoteConfirm, setDeleteLoteConfirm] = useState(null)
+  const [formError, setFormError] = useState(null)
 
   const cafesPorId = useMemo(
     () => Object.fromEntries(cafes.map(cafe => [cafe.id, cafe])),
@@ -72,14 +76,19 @@ export default function Stock() {
     })
   }, [cafes])
 
-  const handleCafeSubmit = (data, id) => {
-    if (id) {
-      updateCafe(id, data)
-    } else {
-      addCafe(data)
+  const handleCafeSubmit = async (data, id) => {
+    try {
+      setFormError(null)
+      if (id) {
+        await updateCafe(id, data)
+      } else {
+        await addCafe(data)
+      }
+      setShowCafeForm(false)
+      setEditingCafe(null)
+    } catch (err) {
+      setFormError(err.message || 'Error al guardar el café')
     }
-    setShowCafeForm(false)
-    setEditingCafe(null)
   }
 
   const handleEditCafe = (cafe) => {
@@ -100,28 +109,43 @@ export default function Stock() {
     setShowLoteForm(true)
   }
 
-  const handleLoteSubmit = (data, loteId, cafeOrigenId) => {
-    if (loteId) {
-      updateLote(cafeOrigenId, loteId, data)
-    } else {
-      addLote(data.cafeId, data)
+  const handleLoteSubmit = async (data, loteId, cafeOrigenId) => {
+    try {
+      setFormError(null)
+      if (loteId) {
+        await updateLote(cafeOrigenId, loteId, data)
+      } else {
+        await addLote(data.cafeId, data)
+      }
+      setShowLoteForm(false)
+      setEditingLote(null)
+      setLoteCafeId(null)
+    } catch (err) {
+      setFormError(err.message || 'Error al guardar el lote')
     }
-    setShowLoteForm(false)
-    setEditingLote(null)
-    setLoteCafeId(null)
   }
 
-  const confirmDeleteCafe = () => {
+  const confirmDeleteCafe = async () => {
     if (deleteCafeConfirm) {
-      deleteCafe(deleteCafeConfirm)
-      setDeleteCafeConfirm(null)
+      try {
+        setFormError(null)
+        await deleteCafe(deleteCafeConfirm)
+        setDeleteCafeConfirm(null)
+      } catch (err) {
+        setFormError(err.message || 'Error al eliminar el café')
+      }
     }
   }
 
-  const confirmDeleteLote = () => {
+  const confirmDeleteLote = async () => {
     if (deleteLoteConfirm) {
-      deleteLote(deleteLoteConfirm.cafeId, deleteLoteConfirm.loteId)
-      setDeleteLoteConfirm(null)
+      try {
+        setFormError(null)
+        await deleteLote(deleteLoteConfirm.cafeId, deleteLoteConfirm.loteId)
+        setDeleteLoteConfirm(null)
+      } catch (err) {
+        setFormError(err.message || 'Error al eliminar el lote')
+      }
     }
   }
 
@@ -149,8 +173,51 @@ export default function Stock() {
     )
   }
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-coffee-500 border-t-transparent"></div>
+          <p className="text-[var(--color-text-secondary)]">Cargando inventario...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-center">
+        <p className="mb-2 font-medium text-red-600 dark:text-red-400">Error al cargar el inventario</p>
+        <p className="text-sm text-red-500 dark:text-red-300">{error}</p>
+        <button
+          onClick={cargarInventario}
+          className="mt-4 rounded-lg bg-red-500 px-4 py-2 text-white hover:bg-red-600"
+        >
+          Reintentar
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
+      {formError && (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600 dark:text-red-400" />
+            <div className="flex-1">
+              <p className="text-sm text-red-700 dark:text-red-300">{formError}</p>
+            </div>
+            <button
+              onClick={() => setFormError(null)}
+              className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--color-text-primary)]">

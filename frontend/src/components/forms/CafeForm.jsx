@@ -25,6 +25,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
   const [nuevoComponente, setNuevoComponente] = useState('')
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [apiError, setApiError] = useState(null)
 
   const simples = cafes.filter(cafe => cafe.tipoProducto === 'simple')
 
@@ -42,7 +43,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
         descripcion: initialData.descripcion || '',
         mezcla: initialData.mezcla
           ? initialData.mezcla
-              .filter(m => cafes.some(cafe => cafe.id === m.cafeId))
+              .filter(m => cafes.some(cafe => cafe.id === Number(m.cafeId)))
               .map(m => ({ ...m }))
           : [],
       })
@@ -51,6 +52,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
     }
     setNuevoComponente('')
     setErrors({})
+    setApiError(null)
   }, [isOpen, initialData, cafes])
 
   const handleChange = (e) => {
@@ -65,26 +67,26 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
   }
 
   const mezclaSeleccionada = formData.mezcla
-    .map(m => ({ ...m, cafe: cafes.find(c => c.id === m.cafeId) }))
+    .map(m => ({ ...m, cafe: cafes.find(c => c.id === Number(m.cafeId)) }))
     .filter(m => m.cafe)
 
   const totalPorcentaje = formData.mezcla.reduce((sum, m) => sum + (Number(m.porcentaje) || 0), 0)
 
   const recalcularMezcla = (cafeIds) => {
-    const seleccionados = cafeIds.map(id => cafes.find(c => c.id === id)).filter(Boolean)
+    const seleccionados = cafeIds.map(id => cafes.find(c => c.id === Number(id))).filter(Boolean)
     return sugerirPorcentajes(seleccionados).map(({ cafeId, porcentaje }) => ({ cafeId, porcentaje }))
   }
 
   const agregarComponente = () => {
     if (!nuevoComponente) return
-    const ids = [...formData.mezcla.map(m => m.cafeId), nuevoComponente]
+    const ids = [...formData.mezcla.map(m => m.cafeId), Number(nuevoComponente)]
     setFormData(prev => ({ ...prev, mezcla: recalcularMezcla(ids) }))
     setNuevoComponente('')
     setErrors(prev => ({ ...prev, mezcla: '' }))
   }
 
   const quitarComponente = (cafeId) => {
-    const ids = formData.mezcla.filter(m => m.cafeId !== cafeId).map(m => m.cafeId)
+    const ids = formData.mezcla.filter(m => m.cafeId !== Number(cafeId)).map(m => m.cafeId)
     setFormData(prev => ({
       ...prev,
       mezcla: ids.length === 0 ? [] : recalcularMezcla(ids),
@@ -95,7 +97,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
     const valor = Math.min(100, Math.max(0, Number(porcentaje) || 0))
     setFormData(prev => ({
       ...prev,
-      mezcla: prev.mezcla.map(m => (m.cafeId === cafeId ? { ...m, porcentaje: valor } : m)),
+      mezcla: prev.mezcla.map(m => (m.cafeId === Number(cafeId) ? { ...m, porcentaje: valor } : m)),
     }))
   }
 
@@ -122,39 +124,46 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e?.preventDefault()
     if (!validate()) return
 
     setSubmitting(true)
-    const precioKg = parseFloat(formData.precioKg)
+    setApiError(null)
+    
+    try {
+      const precioKg = parseFloat(formData.precioKg)
 
-    const data = formData.tipoProducto === 'simple'
-      ? {
-          tipoProducto: 'simple',
-          variedad: formData.variedad.trim(),
-          pais: formData.pais.trim(),
-          region: formData.region.trim(),
-          organico: formData.organico,
-          precioKg,
-          nombre: '',
-          descripcion: '',
-          mezcla: [],
-        }
-      : {
-          tipoProducto: 'blend',
-          nombre: formData.nombre.trim(),
-          descripcion: formData.descripcion.trim(),
-          precioKg,
-          mezcla: formData.mezcla.map(m => ({ cafeId: m.cafeId, porcentaje: Number(m.porcentaje) })),
-          variedad: '',
-          pais: '',
-          region: '',
-          organico: false,
-        }
+      const data = formData.tipoProducto === 'simple'
+        ? {
+            tipoProducto: 'simple',
+            variedad: formData.variedad.trim(),
+            pais: formData.pais.trim(),
+            region: formData.region.trim(),
+            organico: formData.organico,
+            precioKg,
+            nombre: '',
+            descripcion: '',
+            mezcla: [],
+          }
+        : {
+            tipoProducto: 'blend',
+            nombre: formData.nombre.trim(),
+            descripcion: formData.descripcion.trim(),
+            precioKg,
+            mezcla: formData.mezcla.map(m => ({ cafeId: m.cafeId, porcentaje: Number(m.porcentaje) })),
+            variedad: '',
+            pais: '',
+            region: '',
+            organico: false,
+          }
 
-    onSubmit(data, initialData?.id)
-    setSubmitting(false)
+      await onSubmit(data, initialData?.id)
+    } catch (err) {
+      setApiError(err.message || 'Error al guardar el café')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const sugerido = (cafeId) => {
@@ -174,6 +183,11 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
       size="lg"
     >
       <form onSubmit={handleSubmit} className="space-y-5">
+        {apiError && (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3">
+            <p className="text-sm text-red-700 dark:text-red-300">{apiError}</p>
+          </div>
+        )}
         <div className="rounded-xl border border-coffee-500/20 bg-coffee-500/5 p-4">
           <SegmentedToggle
             value={formData.tipoProducto}
