@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta, date
 from decimal import Decimal
@@ -13,9 +14,12 @@ from app.core.database import get_db
 # Base de datos en memoria para tests
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
+# ``StaticPool`` mantiene una única conexión: sin él, cada hilo del TestClient
+# abriría su propia base en memoria vacía.
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -49,14 +53,23 @@ def client(db_session):
 
 
 @pytest.fixture(scope="function")
-def auth_headers(client):
-    """Crear usuario y obtener headers de autenticación."""
-    # Registrar usuario admin
-    client.post("/api/v1/auth/register", json={
-        "email": "admin@test.com",
-        "password": "123456",
-        "role": "Administrador"
-    })
+def auth_headers(client, db_session):
+    """Crear usuario y obtener headers de autenticación.
+
+    El registro público solo crea cuentas ``Cliente``, así que el usuario
+    administrador de las pruebas se inserta directamente en la base.
+    """
+    from app.core.security import get_password_hash
+    from app.modules.auth.models import Cuenta, UserRole
+
+    cuenta = Cuenta(
+        correo="admin@test.com",
+        clave=get_password_hash("123456"),
+        rol=UserRole.ADMINISTRADOR,
+    )
+    db_session.add(cuenta)
+    db_session.commit()
+
     # Login
     response = client.post("/api/v1/auth/login", json={
         "email": "admin@test.com",

@@ -17,9 +17,36 @@ class UserLogin(BaseModel):
 
 
 class UserCreate(BaseModel):
+    """Alta pública desde el portal.
+
+    El rol se acepta por compatibilidad con clientes viejos, pero el servicio
+    lo ignora y siempre crea una cuenta ``Cliente``: el registro público no
+    puede otorgar roles internos.
+    """
+
+    email: str
+    password: str
+    role: str = "Cliente"
+    nombre: Optional[str] = None
+    telefono: Optional[str] = None
+
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        valid_roles = ['Administrador', 'Cajero', 'Operario', 'Cliente']
+        if v not in valid_roles:
+            raise ValueError(f"Rol inválido. Debe ser uno de: {valid_roles}")
+        return v
+
+
+class UserAdminCreate(BaseModel):
+    """Alta de cuentas internas desde el panel (solo Administrador)."""
+
     email: str
     password: str
     role: str
+    nombre: Optional[str] = None
+    telefono: Optional[str] = None
 
     @field_validator('role')
     @classmethod

@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_account, get_current_user
 from app.modules.auth import schemas, services
+from app.modules.auth.models import Cuenta, UserRole
 from app.modules.auth.schemas import TokenData
 
 
@@ -19,9 +20,32 @@ def register(
     user: schemas.UserCreate,
     service: services.AuthService = Depends(get_auth_service)
 ):
+    """Registro público: siempre crea una cuenta con rol Cliente."""
     try:
         db_user = service.register(user)
         return db_user
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/usuarios",
+    response_model=schemas.UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def crear_usuario_interno(
+    datos: schemas.UserAdminCreate,
+    cuenta: Cuenta = Depends(get_current_account),
+    service: services.AuthService = Depends(get_auth_service),
+):
+    """Crea una cuenta con rol interno. Solo Administrador."""
+    if cuenta.rol is not UserRole.ADMINISTRADOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo un Administrador puede crear cuentas internas.",
+        )
+    try:
+        return service.crear_cuenta_interna(datos)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

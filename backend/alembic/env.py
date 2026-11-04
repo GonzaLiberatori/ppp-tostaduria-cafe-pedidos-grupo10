@@ -22,6 +22,7 @@ from app.core.database import Base  # noqa: E402
 # Importar modelos para que SQLAlchemy los registre en Base.metadata
 from app.modules.auth import models as auth_models  # noqa: E402, F401
 from app.modules.clientes import models as clientes_models  # noqa: E402, F401
+from app.modules.envios import models as envios_models  # noqa: E402, F401
 from app.modules.gastos import models as gastos_models  # noqa: E402, F401
 from app.modules.inventario import models as inventario_models  # noqa: E402, F401
 from app.modules.pedidos import models as pedidos_models  # noqa: E402, F401

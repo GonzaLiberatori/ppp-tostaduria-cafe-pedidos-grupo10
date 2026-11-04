@@ -9,7 +9,7 @@ from app.core.security import (
     get_password_hash,
     verify_password,
 )
-from app.modules.auth import models, schemas
+from app.modules.auth import models
 
 
 def get_user_by_email(db: Session, email: str) -> Optional[models.Cuenta]:
@@ -17,23 +17,21 @@ def get_user_by_email(db: Session, email: str) -> Optional[models.Cuenta]:
     return db.query(models.Cuenta).filter(models.Cuenta.correo == email).first()
 
 
-def create_user(db: Session, user: schemas.UserCreate) -> models.Cuenta:
-    """Crea una cuenta validando el rol y hasheando la contraseña."""
-    try:
-        role_enum = models.UserRole(user.role)
-    except ValueError:
-        raise ValueError(
-            f"Rol inválido. Debe ser uno de: {[r.value for r in models.UserRole]}"
-        )
+def crear_cuenta(
+    db: Session, correo: str, password: str, rol: models.UserRole
+) -> models.Cuenta:
+    """Agrega una cuenta a la sesión sin confirmar la transacción.
 
+    El llamador (``AuthService``) es dueño del ``commit`` para poder crear la
+    cuenta y su ``Persona``/``Cliente`` en una sola transacción.
+    """
     db_user = models.Cuenta(
-        correo=user.email,
-        clave=get_password_hash(user.password),
-        rol=role_enum,
+        correo=correo,
+        clave=get_password_hash(password),
+        rol=rol,
     )
     db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    db.flush()
     return db_user
 
 

@@ -45,11 +45,28 @@ class ClientePanelCreate(BaseModel):
     tieneDeuda: bool = False
     montoDeuda: Optional[Decimal] = Field(default=None, ge=0)
     limiteCredito: Optional[Decimal] = Field(default=None, ge=0)
+    # Opcional: si se envía, se crea la cuenta de portal vinculada al cliente.
+    password: Optional[str] = Field(default=None, min_length=6, max_length=72)
 
     @field_validator("tipo")
     @classmethod
     def _tipo_valido(cls, valor: str) -> str:
         return normalizar_tipo_cliente(valor)
+
+
+class ClientePerfilUpdate(BaseModel):
+    """Campos que un cliente puede editar sobre su propio perfil.
+
+    Quedan fuera ``tipo``, ``limiteCredito`` y ``montoDeuda``: son datos
+    comerciales que administra el panel, no el cliente.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    nombre: Optional[str] = Field(default=None, min_length=1, max_length=90)
+    telefono: Optional[str] = Field(default=None, max_length=25)
+    email: Optional[str] = Field(default=None, max_length=100)
+    direccion: Optional[str] = Field(default=None, max_length=100)
 
 
 class ClientePanelUpdate(BaseModel):

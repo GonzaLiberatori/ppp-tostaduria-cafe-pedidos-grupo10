@@ -12,12 +12,23 @@ from app.modules.ventas import services as ventas_services
 PREFIJO = "/api/v1/ventas"
 
 
-def _headers(client, correo: str, rol: str) -> dict[str, str]:
-    """Registra (si hace falta) e inicia sesión con el rol pedido."""
-    client.post(
-        "/api/v1/auth/register",
-        json={"email": correo, "password": "123456", "role": rol},
+def _headers(client, db_session, correo: str, rol: str) -> dict[str, str]:
+    """Crea la cuenta en la base e inicia sesión con el rol pedido.
+
+    El registro público solo permite el rol ``Cliente``; los roles internos se
+    insertan directamente para poder probar el RBAC.
+    """
+    from app.core.security import get_password_hash
+    from app.modules.auth.models import Cuenta, UserRole
+
+    cuenta = Cuenta(
+        correo=correo,
+        clave=get_password_hash("123456"),
+        rol=UserRole(rol),
     )
+    db_session.add(cuenta)
+    db_session.commit()
+
     respuesta = client.post(
         "/api/v1/auth/login",
         json={"email": correo, "password": "123456"},
@@ -114,9 +125,9 @@ class TestRegistro:
         assert len(cuerpo["pagos"]) == 1
 
     def test_cajero_registra_venta(
-        self, client, pedido_entregado_b2b
+        self, client, db_session, pedido_entregado_b2b
     ) -> None:
-        headers = _headers(client, "cajero@test.com", "Cajero")
+        headers = _headers(client, db_session, "cajero@test.com", "Cajero")
 
         respuesta = client.post(
             PREFIJO + "/", json=_cuerpo(pedido_entregado_b2b), headers=headers
@@ -125,9 +136,9 @@ class TestRegistro:
         assert respuesta.status_code == 201
 
     def test_operario_no_puede_registrar(
-        self, client, pedido_entregado_b2b
+        self, client, db_session, pedido_entregado_b2b
     ) -> None:
-        headers = _headers(client, "operario@test.com", "Operario")
+        headers = _headers(client, db_session, "operario@test.com", "Operario")
 
         respuesta = client.post(
             PREFIJO + "/", json=_cuerpo(pedido_entregado_b2b), headers=headers
@@ -136,9 +147,9 @@ class TestRegistro:
         assert respuesta.status_code == 403
 
     def test_cliente_no_puede_registrar(
-        self, client, pedido_entregado_b2b
+        self, client, db_session, pedido_entregado_b2b
     ) -> None:
-        headers = _headers(client, "portal@test.com", "Cliente")
+        headers = _headers(client, db_session, "portal@test.com", "Cliente")
 
         respuesta = client.post(
             PREFIJO + "/", json=_cuerpo(pedido_entregado_b2b), headers=headers
@@ -249,16 +260,16 @@ class TestRegistro:
 class TestConsultas:
     """Listado, resumen y detalle."""
 
-    def test_operario_puede_listar(self, client, venta_confirmada) -> None:
-        headers = _headers(client, "operario@test.com", "Operario")
+    def test_operario_puede_listar(self, client, db_session, venta_confirmada) -> None:
+        headers = _headers(client, db_session, "operario@test.com", "Operario")
 
         respuesta = client.get(f"{PREFIJO}/", headers=headers)
 
         assert respuesta.status_code == 200
         assert len(respuesta.json()) == 1
 
-    def test_cliente_no_puede_listar(self, client, venta_confirmada) -> None:
-        headers = _headers(client, "portal@test.com", "Cliente")
+    def test_cliente_no_puede_listar(self, client, db_session, venta_confirmada) -> None:
+        headers = _headers(client, db_session, "portal@test.com", "Cliente")
 
         respuesta = client.get(f"{PREFIJO}/", headers=headers)
 
@@ -307,9 +318,9 @@ class TestConsultas:
         assert cuerpo[0]["totales_por_metodo"][0]["metodo_de_pago"] == "CREDITO"
 
     def test_cajero_consulta_resumen_mensual(
-        self, client, venta_confirmada
+        self, client, db_session, venta_confirmada
     ) -> None:
-        headers = _headers(client, "cajero@test.com", "Cajero")
+        headers = _headers(client, db_session, "cajero@test.com", "Cajero")
 
         respuesta = client.get(
             f"{PREFIJO}/resumen-mensual", headers=headers
@@ -318,9 +329,9 @@ class TestConsultas:
         assert respuesta.status_code == 200
 
     def test_operario_consulta_resumen_mensual(
-        self, client, venta_confirmada
+        self, client, db_session, venta_confirmada
     ) -> None:
-        headers = _headers(client, "operario@test.com", "Operario")
+        headers = _headers(client, db_session, "operario@test.com", "Operario")
 
         respuesta = client.get(
             f"{PREFIJO}/resumen-mensual", headers=headers
@@ -329,9 +340,9 @@ class TestConsultas:
         assert respuesta.status_code == 200
 
     def test_cliente_no_puede_consultar_resumen_mensual(
-        self, client, venta_confirmada
+        self, client, db_session, venta_confirmada
     ) -> None:
-        headers = _headers(client, "portal@test.com", "Cliente")
+        headers = _headers(client, db_session, "portal@test.com", "Cliente")
 
         respuesta = client.get(
             f"{PREFIJO}/resumen-mensual", headers=headers
@@ -426,9 +437,9 @@ class TestCobranza:
         )
 
     def test_operario_puede_consultar_cobranza_y_por_cobrar(
-        self, client, venta_confirmada
+        self, client, db_session, venta_confirmada
     ) -> None:
-        headers = _headers(client, "operario@test.com", "Operario")
+        headers = _headers(client, db_session, "operario@test.com", "Operario")
 
         assert (
             client.get(f"{PREFIJO}/cobranza-mensual", headers=headers).status_code
@@ -440,9 +451,9 @@ class TestCobranza:
         )
 
     def test_cliente_no_puede_consultar_cobranza_ni_por_cobrar(
-        self, client, venta_confirmada
+        self, client, db_session, venta_confirmada
     ) -> None:
-        headers = _headers(client, "portal@test.com", "Cliente")
+        headers = _headers(client, db_session, "portal@test.com", "Cliente")
 
         assert (
             client.get(f"{PREFIJO}/cobranza-mensual", headers=headers).status_code
@@ -602,9 +613,9 @@ class TestAnulacion:
         assert cuerpo["historial"][-1]["motivo"] == "Cobro duplicado"
 
     def test_cajero_no_puede_anular(
-        self, client, venta_confirmada
+        self, client, db_session, venta_confirmada
     ) -> None:
-        headers = _headers(client, "cajero@test.com", "Cajero")
+        headers = _headers(client, db_session, "cajero@test.com", "Cajero")
 
         respuesta = client.post(
             f"{PREFIJO}/{venta_confirmada.id}/anular",
