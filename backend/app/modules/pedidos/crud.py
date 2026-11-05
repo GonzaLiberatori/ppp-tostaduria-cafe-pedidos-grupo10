@@ -272,6 +272,10 @@ def _calcular_precio_kg_detalle(db: Session, detalle_data: schemas.DetallePedido
     else:
         raise ValueError("Debe especificar tipo_de_cafe_id o blend_id")
     
+    # El café verde se vende como materia prima: solo el precio de origen.
+    if detalle_data.tipo_stock == models.LoteTipo.VERDE:
+        return precio_base
+    
     # Agregar valor de molienda
     if detalle_data.molienda_id:
         molienda = db.query(Molienda).filter(Molienda.id == detalle_data.molienda_id).first()
@@ -310,10 +314,11 @@ def delete_pedido(db: Session, pedido_id: int) -> bool:
     if db_pedido.estado == "PENDIENTE":
         detalles = get_detalles_by_pedido(db, pedido_id)
         for detalle in detalles:
+            tipo_stock = detalle.tipo_stock or models.LoteTipo.TOSTADO
             if detalle.tipo_de_cafe_id:
                 lotes = db.query(models.Lote).filter(
                     models.Lote.tipo_de_cafe_id == detalle.tipo_de_cafe_id,
-                    models.Lote.tipo == "TOSTADO",
+                    models.Lote.tipo == tipo_stock,
                     models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                 ).order_by(models.Lote.fecha_vencimiento.desc()).all()
@@ -322,7 +327,7 @@ def delete_pedido(db: Session, pedido_id: int) -> bool:
             if detalle.blend_id:
                 lotes = db.query(models.Lote).filter(
                     models.Lote.blend_id == detalle.blend_id,
-                    models.Lote.tipo == "TOSTADO",
+                    models.Lote.tipo == tipo_stock,
                     models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                 ).order_by(models.Lote.fecha_vencimiento.desc()).all()

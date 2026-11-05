@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
 
-from app.modules.pedidos.models import MetodoPago
+from app.modules.pedidos.models import LoteTipo, MetodoPago
 from app.modules.ventas.schemas import PLAZOS_DE_PAGO, CondicionPago
 
 
@@ -191,6 +191,27 @@ class DetallePedidoBase(BaseModel):
     blend_id: Optional[int] = None
     molienda_id: Optional[int] = None
     perfil_de_tostado_id: Optional[int] = None
+    tipo_stock: LoteTipo = LoteTipo.TOSTADO
+
+    @model_validator(mode="after")
+    def validar_tipo_stock(self) -> "DetallePedidoBase":
+        """El café verde se vende solo por tipo de café y sin tostado.
+
+        No hay stock verde de un blend (el blend es la receta de tostado) y la
+        molienda/perfil solo agregan valor al producto tostado.
+        """
+        if self.tipo_stock == LoteTipo.VERDE:
+            if self.tipo_de_cafe_id is None or self.blend_id is not None:
+                raise ValueError(
+                    "El café verde solo se vende por tipo de café, no por blend."
+                )
+            if self.molienda_id is not None or self.perfil_de_tostado_id is not None:
+                raise ValueError(
+                    "El café verde no lleva molienda ni perfil de tostado."
+                )
+        elif self.tipo_de_cafe_id is None and self.blend_id is None:
+            raise ValueError("Debe especificar tipo_de_cafe_id o blend_id")
+        return self
 
 
 class DetallePedidoResponse(DetallePedidoBase):
@@ -479,6 +500,7 @@ class PedidoPanelItemRead(BaseModel):
     kilos: float
     precioKg: float
     subtotal: float
+    tipoStock: str = LoteTipo.TOSTADO.value
 
 
 class PedidoPanelRead(BaseModel):

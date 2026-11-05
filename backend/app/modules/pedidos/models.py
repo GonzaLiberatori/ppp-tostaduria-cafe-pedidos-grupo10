@@ -148,6 +148,20 @@ class DetallePedido(Base):
     cantidad_kg = Column(Numeric(10, 2), nullable=False)
     subtotal = Column(Numeric(10, 2), nullable=False)
     pedido_id = Column(Integer, ForeignKey("pedido.id"), nullable=False)
+    # De qué stock salió el ítem: el café verde se vende como materia prima y
+    # el tostado como producto terminado. Define qué lote se descuenta al
+    # reservar y cuál se devuelve al anular la venta o eliminar el pedido.
+    tipo_stock = Column(
+        SQLEnum(
+            LoteTipo,
+            values_callable=lambda e: [m.value for m in e],
+            native_enum=False,
+            name="detalle_pedido_tipo_stock",
+        ),
+        nullable=False,
+        default=LoteTipo.TOSTADO,
+        server_default=LoteTipo.TOSTADO.value,
+    )
     tipo_de_cafe_id = Column(
         Integer, ForeignKey("tipo_de_cafe.id"), nullable=True
     )

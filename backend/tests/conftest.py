@@ -292,6 +292,28 @@ def sample_lote(db_session, sample_tipo_cafe):
 
 
 @pytest.fixture(scope="function")
+def sample_lote_verde(db_session, sample_tipo_cafe):
+    """Crear un lote de café verde (materia prima) de prueba."""
+    from app.modules.pedidos.models import Lote
+    from datetime import datetime, timedelta
+
+    lote = Lote(
+        tipo="VERDE",
+        estado="ABIERTO",
+        fecha_vencimiento=datetime.now() + timedelta(days=365),
+        humedad=12.5,
+        kg_disponibles=100,
+        kg_reales=100,
+        ubicacion_fisica="Bodega Verde",
+        tipo_de_cafe_id=sample_tipo_cafe.id,
+    )
+    db_session.add(lote)
+    db_session.commit()
+    db_session.refresh(lote)
+    return lote
+
+
+@pytest.fixture(scope="function")
 def sample_lote_detallado(db_session, sample_tipo_cafe):
     """Crear múltiples lotes con diferentes fechas para test FIFO."""
     from app.modules.pedidos.models import Lote, TipoLote, EstadoLote, OrdenTueste, PerfilDeTostado
