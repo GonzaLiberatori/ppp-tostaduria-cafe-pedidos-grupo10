@@ -20,6 +20,7 @@ build/
 Thumbs.db
 .atl
 D/
+.playwright-mcp
 
 # === Base de datos local ===
 backend/db_ventas.sqlite

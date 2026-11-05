@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vite/
+
+# Secretos: se inyectan por variables de entorno (VITE_*) en build/dev
+.env
+.env.*
+
+*.log

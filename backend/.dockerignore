@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Secretos: se inyectan por variables de entorno, no en la imagen
+.env
+.env.*
+!.env.example
+
+# La DB vive en el host (bind mount): no va dentro de las capas de la imagen
+db.sqlite
+db_*.sqlite
+
+*.log
+logs/
+tests/

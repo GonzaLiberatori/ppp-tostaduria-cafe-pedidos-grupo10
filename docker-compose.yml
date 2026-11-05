@@ -1,0 +1,35 @@
+# Orquestación del proyecto completo: FastAPI (SQLite) + React/Vite en modo dev.
+# La base de datos sigue siendo SQLite y vive en el host (backend/db.sqlite),
+# compartida entre el contenedor y las corridas locales sin Docker.
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Código montado desde el host para hot reload con uvicorn --reload.
+      # También monta backend/db.sqlite: la DB persiste fuera del contenedor.
+      - ./backend:/app
+    environment:
+      # Los bind mounts de Windows no siempre propagan eventos de archivo a
+      # Linux; force polling para que el auto-reload de uvicorn se dispare.
+      WATCHFILES_FORCE_POLLING: "true"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      # Volumen named que protege los node_modules instalados en la imagen:
+      # sin él, el node_modules de Windows del host taparía los binarios Linux.
+      # Refrescar con `docker compose down -v` si cambia package-lock.json.
+      - node_modules:/app/node_modules
+    environment:
+      # Señala a vite.config.js que corre dentro del contenedor.
+      DOCKER: "1"
+    depends_on:
+      - backend
+
+volumes:
+  node_modules:
