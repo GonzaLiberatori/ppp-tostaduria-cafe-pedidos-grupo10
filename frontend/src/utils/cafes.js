@@ -17,7 +17,12 @@ export function origenCafe(cafe) {
 export function kilosPorTipo(lotes = [], tipo) {
   return lotes
     .filter(lote => lote.tipo === tipo)
-    .reduce((sum, lote) => sum + (lote.kilos || 0), 0)
+    // Se usa el stock disponible (no los kg reales de alta): los lotes ya
+    // vendidos conservan su peso original, pero solo cuentan los kg que quedan.
+    .reduce((sum, lote) => {
+      const disponible = lote.kgDisponibles ?? lote.kilos
+      return sum + (Number(disponible) || 0)
+    }, 0)
 }
 
 export function kilosCafe(cafe, tipo) {

@@ -10,6 +10,7 @@ tueste, que pertenecen a producción.
 import enum
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum as SQLEnum,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    false,
 )
 from sqlalchemy.orm import relationship
 
@@ -116,6 +118,12 @@ class Pedido(Base):
     )
     empleado_persona_id = Column(
         Integer, ForeignKey("empleado.persona_id"), nullable=True
+    )
+    # Marca si el stock de los detalles está devuelto al inventario. Al anular
+    # una venta se devuelve y queda en True; al revender se vuelve a descontar
+    # y queda en False. Evita devolver o descontar dos veces.
+    stock_restaurado = Column(
+        Boolean, nullable=False, default=False, server_default=false()
     )
 
     cliente = relationship("Cliente", back_populates="pedidos")

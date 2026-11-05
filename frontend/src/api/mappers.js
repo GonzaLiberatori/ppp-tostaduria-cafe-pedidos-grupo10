@@ -167,6 +167,7 @@ export function loteToBackendUpdate(lote) {
     fecha_vencimiento: lote.vencimiento,
     humedad: lote.humedad,
     kg_reales: lote.kilos,
+    kg_disponibles: lote.kgDisponibles,
     ubicacion_fisica: lote.ubicacion,
     observaciones: lote.observaciones,
   }

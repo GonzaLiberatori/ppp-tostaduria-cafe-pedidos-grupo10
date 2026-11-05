@@ -5,7 +5,8 @@ la venta misma es la operación. ``registrar_venta_de_entrega`` no lo hace: la
 entrega es un caso de uso de ``pedidos`` y el commit lo cierra
 ``PedidoService.cambiar_estado_pedido``.
 
-Ninguna operación de este módulo modifica stock. La cuenta corriente solo se
+El stock se descuenta al crear el pedido y se devuelve al anular la venta. Si
+el pedido se vuelve a vender, se descuenta otra vez. La cuenta corriente solo se
 toca en las ventas a pagaré: suma la deuda al registrarse, la descuenta al
 cobrarse y la revierte al anularse, siempre a través de
 ``clientes.services.ajustar_saldo_cuenta_corriente``.
@@ -115,6 +116,16 @@ class VentaYaAnulada(Exception):
         super().__init__(f"La venta {venta_id} ya está anulada.")
 
 
+class StockInsuficienteParaVenta(ValueError):
+    """No hay stock para volver a vender un pedido cuya venta fue anulada."""
+
+    def __init__(self, detalle: str) -> None:
+        super().__init__(
+            "No hay stock suficiente para volver a vender el pedido: "
+            f"{detalle}"
+        )
+
+
 class ComprobanteDuplicado(Exception):
     """El número de comprobante generado ya estaba asignado a otra venta."""
 
@@ -168,6 +179,31 @@ class PlazoInvalido(Exception):
 def _a_decimal(valor: object) -> Decimal:
     """Normaliza a Decimal los valores que SQLite devuelve como número."""
     return Decimal(str(valor or 0))
+
+
+def _restaurar_stock_de_pedido(db: Session, pedido: Pedido) -> None:
+    """Devuelve el stock del pedido al inventario. Sin commit.
+
+    La importación es local para no crear un ciclo: ``pedidos.services``
+    importa este módulo al cargarse.
+    """
+    from app.modules.pedidos import services as pedidos_services
+
+    pedidos_services.restaurar_stock_de_pedido(db, pedido)
+
+
+def _consumir_stock_de_pedido(db: Session, pedido: Pedido) -> None:
+    """Vuelve a descontar el stock si la venta anterior lo había devuelto.
+
+    Se usa al revender un pedido cuya venta fue anulada. Traduce la falta de
+    stock a un error de dominio de ventas. Sin commit.
+    """
+    from app.modules.pedidos import services as pedidos_services
+
+    try:
+        pedidos_services.consumir_stock_de_pedido(db, pedido)
+    except ValueError as exc:
+        raise StockInsuficienteParaVenta(str(exc)) from exc
 
 
 def _estado_pedido(pedido: object) -> str:
@@ -394,6 +430,8 @@ def registrar_venta_de_entrega(
         pagos = [(metodo_de_pago, total, Moneda.ARS, None)]
         motivo = "Venta al contado generada al confirmar la entrega"
 
+    _consumir_stock_de_pedido(db, pedido)
+
     return _persistir_venta(
         db,
         pedido_id=pedido.id,
@@ -462,6 +500,7 @@ class VentaService:
         ]
 
         try:
+            _consumir_stock_de_pedido(self.db, pedido)
             venta = _persistir_venta(
                 self.db,
                 pedido_id=pedido.id,
@@ -548,11 +587,11 @@ class VentaService:
         datos: VentaAnulacionCreate,
         cuenta_id: Optional[int] = None,
     ) -> VentaDetailRead:
-        """Anula la venta de forma lógica, sin tocar el stock.
+        """Anula la venta de forma lógica y devuelve el stock del pedido.
 
         Si la venta estaba ``PENDIENTE_COBRO`` revierte la deuda que había
         generado en la cuenta corriente del cliente; una venta al contado no
-        toca el saldo.
+        toca el saldo. El stock se devuelve una sola vez por pedido.
         """
         venta = crud.obtener_por_id(self.db, venta_id)
         if venta is None:
@@ -589,6 +628,8 @@ class VentaService:
                     pedido.cliente_persona_id,
                     -_a_decimal(venta.total),
                 )
+
+            _restaurar_stock_de_pedido(self.db, pedido)
 
             self.db.commit()
         except Exception:

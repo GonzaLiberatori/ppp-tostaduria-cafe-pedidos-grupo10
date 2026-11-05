@@ -236,7 +236,7 @@ def editar_lote(
     """Modifica solo los atributos enviados con valor."""
     try:
         return services.actualizar_lote(db, lote_id, datos)
-    except services.LoteNoEncontrado as exc:
+    except (services.LoteNoEncontrado, services.KgDisponiblesExcedeKgReales) as exc:
         _a_codigo_http(exc)
 
 

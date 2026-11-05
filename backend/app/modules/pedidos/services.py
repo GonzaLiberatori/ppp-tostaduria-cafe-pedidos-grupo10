@@ -13,6 +13,150 @@ from app.modules.ventas import services as ventas_services
 from app.modules.ventas.schemas import CondicionPago
 
 
+# ---------------------------------------------------------------------------
+# Stock del pedido: helpers sin commit
+#
+# `crear_pedido_completo` descuenta el stock al reservar el pedido. Si después
+# la venta se anula, ese stock tiene que volver al inventario. Estos helpers
+# concentran el movimiento para que pedidos y ventas trabajen sobre la misma
+# regla y dentro de la transacción de quien llama.
+# ---------------------------------------------------------------------------
+
+
+def _lotes_para_producto(
+    db: Session,
+    tipo_de_cafe_id: Optional[int],
+    blend_id: Optional[int],
+) -> List[models.Lote]:
+    """Lotes tostados activos del producto, del vencimiento más próximo al más lejano."""
+    if tipo_de_cafe_id is None and blend_id is None:
+        return []
+
+    query = db.query(models.Lote).filter(
+        models.Lote.tipo == "TOSTADO",
+        models.Lote.archivado.is_(False),
+        models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
+    )
+    if tipo_de_cafe_id is not None:
+        query = query.filter(models.Lote.tipo_de_cafe_id == tipo_de_cafe_id)
+    else:
+        query = query.filter(models.Lote.blend_id == blend_id)
+
+    return query.order_by(models.Lote.fecha_vencimiento, models.Lote.id).all()
+
+
+def _consumir_stock_producto(
+    db: Session,
+    tipo_de_cafe_id: Optional[int],
+    blend_id: Optional[int],
+    cantidad: Decimal,
+) -> List[dict]:
+    """Descuenta ``cantidad`` del producto en FIFO. Sin commit."""
+    cantidad = Decimal(cantidad)
+    lotes = _lotes_para_producto(db, tipo_de_cafe_id, blend_id)
+    disponible = sum(
+        (Decimal(lote.kg_disponibles) for lote in lotes), Decimal("0")
+    )
+    if disponible < cantidad:
+        raise ValueError(
+            f"Stock insuficiente: disponible {disponible} kg, "
+            f"solicitado {cantidad} kg."
+        )
+
+    consumo: List[dict] = []
+    restante = cantidad
+    for lote in lotes:
+        if restante <= 0:
+            break
+
+        disponible_lote = Decimal(lote.kg_disponibles)
+        consumido = min(disponible_lote, restante)
+        if consumido <= 0:
+            continue
+
+        lote.kg_disponibles = disponible_lote - consumido
+        consumo.append({"lote_id": lote.id, "kg_consumidos": consumido})
+        restante -= consumido
+
+        lote.estado = "CERRADO" if lote.kg_disponibles == 0 else "ABIERTO"
+
+    return consumo
+
+
+def _devolver_stock_producto(
+    db: Session,
+    tipo_de_cafe_id: Optional[int],
+    blend_id: Optional[int],
+    cantidad: Decimal,
+) -> Decimal:
+    """Devuelve ``cantidad`` al producto en orden inverso al FIFO. Sin commit.
+
+    Respeta los ``kg_reales`` de cada lote para no inventar stock. Devuelve los
+    kilos efectivamente restaurados: puede ser menos si los lotes ya estaban
+    completos o fueron dados de baja.
+    """
+    cantidad = Decimal(cantidad)
+    lotes = _lotes_para_producto(db, tipo_de_cafe_id, blend_id)
+    restante = cantidad
+
+    for lote in reversed(lotes):
+        if restante <= 0:
+            break
+
+        capacidad = Decimal(lote.kg_reales) - Decimal(lote.kg_disponibles)
+        if capacidad <= 0:
+            continue
+
+        a_restaurar = min(restante, capacidad)
+        lote.kg_disponibles = Decimal(lote.kg_disponibles) + a_restaurar
+        lote.estado = "ABIERTO"
+        restante -= a_restaurar
+
+    return cantidad - restante
+
+
+def restaurar_stock_de_pedido(db: Session, pedido: models.Pedido) -> Decimal:
+    """Devuelve al inventario el stock de los detalles del pedido. Sin commit.
+
+    Es idempotente por pedido: si el stock ya estaba restaurado, no hace nada.
+    Lo usan la anulación de una venta y la eliminación de un pedido.
+    """
+    if pedido.stock_restaurado:
+        return Decimal("0")
+
+    restaurado = Decimal("0")
+    for detalle in pedido.detalles:
+        restaurado += _devolver_stock_producto(
+            db,
+            detalle.tipo_de_cafe_id,
+            detalle.blend_id,
+            Decimal(detalle.cantidad_kg),
+        )
+
+    pedido.stock_restaurado = True
+    return restaurado
+
+
+def consumir_stock_de_pedido(db: Session, pedido: models.Pedido) -> None:
+    """Vuelve a descontar el stock si estaba restaurado. Sin commit.
+
+    Al revender un pedido cuya venta se anuló, el stock se había devuelto; hay
+    que descontarlo otra vez para que el inventario no quede inflado.
+    """
+    if not pedido.stock_restaurado:
+        return
+
+    for detalle in pedido.detalles:
+        _consumir_stock_producto(
+            db,
+            detalle.tipo_de_cafe_id,
+            detalle.blend_id,
+            Decimal(detalle.cantidad_kg),
+        )
+
+    pedido.stock_restaurado = False
+
+
 class PedidoService:
     def __init__(self, db: Session):
         self.db = db
@@ -91,57 +235,22 @@ class PedidoService:
         sellada se abre en el momento de descontar, porque el panel de stock
         nace con todas las bolsas cerradas.
         """
-        if tipo_de_cafe_id:
-            lotes = self.db.query(models.Lote).filter(
-                models.Lote.tipo_de_cafe_id == tipo_de_cafe_id,
-                models.Lote.tipo == "TOSTADO",
-                models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
-                models.Lote.kg_disponibles > 0,
-            ).order_by(models.Lote.fecha_vencimiento).all()
-        elif blend_id:
-            lotes = self.db.query(models.Lote).filter(
-                models.Lote.blend_id == blend_id,
-                models.Lote.tipo == "TOSTADO",
-                models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
-                models.Lote.kg_disponibles > 0,
-            ).order_by(models.Lote.fecha_vencimiento).all()
-        else:
+        if tipo_de_cafe_id is None and blend_id is None:
             raise ValueError("Debe especificar tipo_de_cafe_id o blend_id")
-        
-        if not lotes:
-            raise ValueError("No hay lotes disponibles")
-        
-        consumo_detalle = []
-        restante = cantidad
-        
-        for lote in lotes:
-            if restante <= 0:
-                break
-            
-            if lote.kg_disponibles >= restante:
-                lote.kg_disponibles -= restante
-                consumo_detalle.append({"lote_id": lote.id, "kg_consumidos": restante})
-                restante = Decimal("0")
-            else:
-                consumo_detalle.append({"lote_id": lote.id, "kg_consumidos": lote.kg_disponibles})
-                restante -= lote.kg_disponibles
-                lote.kg_disponibles = Decimal("0")
-            
-            if lote.kg_disponibles == 0:
-                lote.estado = "CERRADO"
-            else:
-                lote.estado = "ABIERTO"
-        
-        if restante > 0:
-            raise ValueError("Stock insuficiente")
-        
+
+        consumo_detalle = _consumir_stock_producto(
+            self.db, tipo_de_cafe_id, blend_id, cantidad
+        )
         self.db.commit()
         return consumo_detalle
 
     def _restaurar_stock_fifo(self, consumo_detalle: List[dict]):
         """Restaurar stock exacto usando el detalle de consumo"""
         for consumo in consumo_detalle:
-            lote = self.db.query(models.Lote).filter(models.Lote.id == consumo["lote_id"]).first()
+            lote = self.db.query(models.Lote).filter(
+                models.Lote.id == consumo["lote_id"],
+                models.Lote.archivado.is_(False),
+            ).first()
             if lote:
                 lote.kg_disponibles += consumo["kg_consumidos"]
                 if lote.estado == "CERRADO" and lote.kg_disponibles > 0:
@@ -202,21 +311,29 @@ class PedidoService:
                 total_disponible = self.db.query(func.sum(models.Lote.kg_disponibles)).filter(
                     models.Lote.tipo_de_cafe_id == detalle.tipo_de_cafe_id,
                     models.Lote.tipo == "TOSTADO",
+                    models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
                     models.Lote.kg_disponibles > 0
                 ).scalar() or Decimal("0")
                 if total_disponible < detalle.cantidad_kg:
-                    raise ValueError(f"Stock insuficiente para tipo de café {detalle.tipo_de_cafe_id}")
+                    raise ValueError(
+                        f"Stock insuficiente para tipo de café {detalle.tipo_de_cafe_id}: "
+                        f"disponible {total_disponible} kg, solicitado {detalle.cantidad_kg} kg."
+                    )
             
             if detalle.blend_id:
                 total_disponible = self.db.query(func.sum(models.Lote.kg_disponibles)).filter(
                     models.Lote.blend_id == detalle.blend_id,
                     models.Lote.tipo == "TOSTADO",
+                    models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"]),
                     models.Lote.kg_disponibles > 0
                 ).scalar() or Decimal("0")
                 if total_disponible < detalle.cantidad_kg:
-                    raise ValueError(f"Stock insuficiente para blend {detalle.blend_id}")
+                    raise ValueError(
+                        f"Stock insuficiente para blend {detalle.blend_id}: "
+                        f"disponible {total_disponible} kg, solicitado {detalle.cantidad_kg} kg."
+                    )
         
         # Crear el pedido con total calculado
         pedido_con_total = schemas.PedidoCreate(
@@ -308,6 +425,7 @@ class PedidoService:
                     lotes = self.db.query(models.Lote).filter(
                         models.Lote.tipo_de_cafe_id == detalle.tipo_de_cafe_id,
                         models.Lote.tipo == "TOSTADO",
+                        models.Lote.archivado.is_(False),
                         models.Lote.estado == "ABIERTO",
                         models.Lote.kg_disponibles + stock_reservado >= detalle.cantidad_kg
                     ).all()
@@ -323,6 +441,7 @@ class PedidoService:
                     lotes = self.db.query(models.Lote).filter(
                         models.Lote.blend_id == detalle.blend_id,
                         models.Lote.tipo == "TOSTADO",
+                        models.Lote.archivado.is_(False),
                         models.Lote.estado == "ABIERTO",
                         models.Lote.kg_disponibles + stock_reservado >= detalle.cantidad_kg
                     ).all()
@@ -336,6 +455,7 @@ class PedidoService:
                     lotes = self.db.query(models.Lote).filter(
                         models.Lote.tipo_de_cafe_id == det.tipo_de_cafe_id,
                         models.Lote.tipo == "TOSTADO",
+                        models.Lote.archivado.is_(False),
                         models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                     ).order_by(models.Lote.fecha_vencimiento.desc()).all()
                     self._devolver_stock_lotes(lotes, det.cantidad_kg)
@@ -344,6 +464,7 @@ class PedidoService:
                     lotes = self.db.query(models.Lote).filter(
                         models.Lote.blend_id == det.blend_id,
                         models.Lote.tipo == "TOSTADO",
+                        models.Lote.archivado.is_(False),
                         models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                     ).order_by(models.Lote.fecha_vencimiento.desc()).all()
                     self._devolver_stock_lotes(lotes, det.cantidad_kg)
@@ -362,6 +483,7 @@ class PedidoService:
                     lotes = self.db.query(models.Lote).filter(
                         models.Lote.tipo_de_cafe_id == detalle.tipo_de_cafe_id,
                         models.Lote.tipo == "TOSTADO",
+                        models.Lote.archivado.is_(False),
                         models.Lote.estado == "ABIERTO"
                     ).order_by(models.Lote.fecha_vencimiento).all()
                     self._descontar_stock_lotes(lotes, detalle.cantidad_kg)
@@ -370,10 +492,14 @@ class PedidoService:
                     lotes = self.db.query(models.Lote).filter(
                         models.Lote.blend_id == detalle.blend_id,
                         models.Lote.tipo == "TOSTADO",
+                        models.Lote.archivado.is_(False),
                         models.Lote.estado == "ABIERTO"
                     ).order_by(models.Lote.fecha_vencimiento).all()
                     self._descontar_stock_lotes(lotes, detalle.cantidad_kg)
             
+            # Los detalles nuevos volvieron a reservar stock para el pedido.
+            db_pedido.stock_restaurado = False
+
             # Actualizar total
             db_pedido.total = sum(d["subtotal"] for d in self._validar_y_calcular_detalles(detalles))
         
@@ -462,6 +588,7 @@ class PedidoService:
                 lotes = self.db.query(models.Lote).filter(
                     models.Lote.tipo_de_cafe_id == det.tipo_de_cafe_id,
                     models.Lote.tipo == "TOSTADO",
+                    models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                 ).order_by(models.Lote.fecha_vencimiento.desc()).all()
                 self._devolver_stock_lotes(lotes, det.cantidad_kg)
@@ -470,6 +597,7 @@ class PedidoService:
                 lotes = self.db.query(models.Lote).filter(
                     models.Lote.blend_id == det.blend_id,
                     models.Lote.tipo == "TOSTADO",
+                    models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                 ).order_by(models.Lote.fecha_vencimiento.desc()).all()
                 self._devolver_stock_lotes(lotes, det.cantidad_kg)
@@ -579,6 +707,7 @@ class StockService:
         return self.db.query(models.Lote).filter(
             models.Lote.tipo_de_cafe_id == tipo_de_cafe_id,
             models.Lote.tipo == "TOSTADO",
+            models.Lote.archivado.is_(False),
             models.Lote.estado == "ABIERTO",
             models.Lote.kg_disponibles > 0
         ).all()
@@ -587,6 +716,7 @@ class StockService:
         return self.db.query(models.Lote).filter(
             models.Lote.blend_id == blend_id,
             models.Lote.tipo == "TOSTADO",
+            models.Lote.archivado.is_(False),
             models.Lote.estado == "ABIERTO",
             models.Lote.kg_disponibles > 0
         ).all()
