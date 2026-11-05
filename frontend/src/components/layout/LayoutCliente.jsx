@@ -85,7 +85,7 @@ export default function LayoutCliente() {
                   <div className="absolute right-0 mt-2 w-56 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl shadow-lg py-2 z-50 animate-slide-in">
                     <div className="px-4 py-3 border-b border-[var(--color-border)]">
                       <p className="text-sm font-medium text-[var(--color-text-primary)] truncate">{user?.nombre || 'Cliente'}</p>
-                      <p className="text-xs text-[var(--color-text-muted)] truncate">{user?.email || 'Sin email registrado'}</p>
+                      <p className="text-xs text-[var(--color-text-muted)] truncate">{user?.correo || user?.email || 'Sin email registrado'}</p>
                     </div>
                     <NavLink
                       to="/cliente/perfil"

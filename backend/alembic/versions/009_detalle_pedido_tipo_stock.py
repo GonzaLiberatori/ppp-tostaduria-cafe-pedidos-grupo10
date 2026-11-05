@@ -39,6 +39,20 @@ def upgrade() -> None:
             )
         )
 
+    # Algunas bases previas guardaban esta misma información como ``tipo_lote``.
+    # Si existe, copiarla evita reclasificar ítems VERDE como TOSTADO al migrar.
+    bind = op.get_bind()
+    columnas = {columna["name"] for columna in sa.inspect(bind).get_columns("detalle_pedido")}
+    if "tipo_lote" in columnas:
+        detalle_pedido = sa.Table(
+            "detalle_pedido",
+            sa.MetaData(),
+            autoload_with=bind,
+        )
+        bind.execute(
+            detalle_pedido.update().values(tipo_stock=detalle_pedido.c.tipo_lote)
+        )
+
 
 def downgrade() -> None:
     """Quita el tipo de stock del detalle."""
