@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { MEDIOS_PAGO } from '../../data/constants'
 import { formatearMoneda, formatearKilos } from '../../utils/formatters'
 import { calcularTotalPedido } from '../../utils/calculations'
-import { nombreCafe, origenCafe, esOrganico, kilosCafe } from '../../utils/cafes'
+import { nombreCafe, origenCafe, esOrganico, kilosCafe, stockIdDeCafe, presentacionesDeCafe } from '../../utils/cafes'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -12,7 +12,7 @@ import Badge from '../../components/ui/Badge'
 import { ShoppingCart, Package, CreditCard, DollarSign, Upload, Clock, Plus, X } from 'lucide-react'
 
 const FORM_INICIAL = {
-  items: [{ cafeId: '', kilos: '' }],
+  items: [{ cafeId: '', presentacion: 'tostado', kilos: '' }],
   medioPago: 'transferencia',
   comprobante: null,
   ticket: null,
@@ -25,13 +25,13 @@ export default function Comprar() {
   const clienteId = user?.clienteId
 
   const cafesPorId = useMemo(
-    () => Object.fromEntries(cafes.map(cafe => [cafe.id, cafe])),
+    () => Object.fromEntries(cafes.map(cafe => [cafe.entidadId, cafe])),
     [cafes]
   )
 
-  // Solo cafés con kilos tostados disponibles
+  // Solo cafés con stock vendible: tostado siempre, verde solo en tipos de café.
   const cafesDisponibles = useMemo(
-    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
+    () => cafes.filter(cafe => presentacionesDeCafe(cafe).some(p => p.disponible > 0)),
     [cafes]
   )
 
@@ -44,13 +44,27 @@ export default function Comprar() {
   const handleItemChange = (index, name, value) => {
     setFormData(prev => ({
       ...prev,
-      items: prev.items.map((item, i) => (i === index ? { ...item, [name]: value } : item)),
+      items: prev.items.map((item, i) => {
+        if (i !== index) return item
+
+        if (name === 'cafeId') {
+          // Al cambiar de café, mantener la presentación si sigue disponible.
+          const cafe = cafes.find(c => c.id === value)
+          const opciones = presentacionesDeCafe(cafe).filter(p => p.disponible > 0)
+          const presentacion = opciones.some(p => p.valor === item.presentacion)
+            ? item.presentacion
+            : (opciones[0]?.valor || 'tostado')
+          return { ...item, cafeId: value, presentacion }
+        }
+
+        return { ...item, [name]: value }
+      }),
     }))
-    setErrors(prev => ({ ...prev, [`item${index}_${name === 'cafeId' ? 'stock' : 'kilos'}`]: '', items: '' }))
+    setErrors(prev => ({ ...prev, [`item${index}_stock`]: '', [`item${index}_kilos`]: '', items: '' }))
   }
 
   const addItem = () => {
-    setFormData(prev => ({ ...prev, items: [...prev.items, { cafeId: '', kilos: '' }] }))
+    setFormData(prev => ({ ...prev, items: [...prev.items, { cafeId: '', presentacion: 'tostado', kilos: '' }] }))
   }
 
   const removeItem = (index) => {
@@ -81,12 +95,14 @@ export default function Comprar() {
         return
       }
       const cafe = cafes.find(c => c.id === item.cafeId)
-      const disponible = kilosCafe(cafe, 'tostado')
+      const presentacion = item.presentacion === 'verde' ? 'verde' : 'tostado'
+      const disponible = kilosCafe(cafe, presentacion)
       const kilos = parseFloat(item.kilos)
       if (!kilos || kilos <= 0) {
         newErrors[`item${index}_kilos`] = 'Cantidad inválida'
       } else if (kilos > disponible + 0.001) {
-        newErrors[`item${index}_kilos`] = `Stock insuficiente (disponible: ${formatearKilos(disponible)})`
+        const etiqueta = presentacion === 'verde' ? 'verde' : 'tostado'
+        newErrors[`item${index}_kilos`] = `Stock ${etiqueta} insuficiente (disponible: ${formatearKilos(disponible)})`
       } else {
         hayValido = true
       }
@@ -112,10 +128,9 @@ export default function Comprar() {
       .map(item => {
         const cafe = cafes.find(c => c.id === item.cafeId)
         return {
-          cafeId: item.cafeId,
-          nombre: nombreCafe(cafe),
+          // El backend recalcula el precio a partir del producto de stock.
+          stockId: stockIdDeCafe(cafe, item.presentacion),
           kilos: parseFloat(item.kilos),
-          precioKg: cafe?.precioKg || 0,
         }
       })
 
@@ -130,9 +145,7 @@ export default function Comprar() {
             ? formData.ticket.name
             : null,
       items,
-      total: calcularTotalPedido(items),
       observaciones: formData.observaciones.trim(),
-      reservado: true, // stock no descontado hasta aprobación admin
     }
 
     try {
@@ -168,13 +181,12 @@ export default function Comprar() {
 
   const reiniciarCompra = () => {
     setFormData({
-      items: [{ stockId: '', kilos: '' }],
+      items: [{ cafeId: '', presentacion: 'tostado', kilos: '' }],
       medioPago: 'transferencia',
       observaciones: '',
     })
     setErrors({})
     setSubmitError('')
-    setStockAlert(null)
     setEnviado(false)
   }
 
@@ -228,7 +240,7 @@ export default function Comprar() {
           <div>
             <h2 className="font-semibold text-[var(--color-text-primary)]">Catálogo disponible</h2>
             <p className="text-sm text-[var(--color-text-muted)]">
-              {cafesDisponibles.length} café{cafesDisponibles.length !== 1 ? 's' : ''} con stock tostado
+              {cafesDisponibles.length} café{cafesDisponibles.length !== 1 ? 's' : ''} con stock disponible
             </p>
           </div>
           <Badge variant="coffee" className="text-xs">{cafesDisponibles.length} disponibles</Badge>
@@ -251,14 +263,22 @@ export default function Comprar() {
                     {esBlend ? 'Blend' : 'Simple'}
                   </Badge>
                 </div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs text-[var(--color-text-muted)]">Precio / kg</p>
                     <p className="font-bold text-[var(--color-text-primary)]">{formatearMoneda(cafe.precioKg)}</p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-xs text-[var(--color-text-muted)]">Tostado disponible</p>
-                    <p className="font-medium font-mono tabular-nums">{formatearKilos(kilosCafe(cafe, 'tostado'))}</p>
+                  <div className="text-right space-y-1">
+                    {cafe.tipoProducto !== 'blend' && (
+                      <div>
+                        <p className="text-xs text-[var(--color-text-muted)]">Verde disponible</p>
+                        <p className="font-medium font-mono tabular-nums">{formatearKilos(kilosCafe(cafe, 'verde'))}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-xs text-[var(--color-text-muted)]">Tostado disponible</p>
+                      <p className="font-medium font-mono tabular-nums">{formatearKilos(kilosCafe(cafe, 'tostado'))}</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -275,41 +295,61 @@ export default function Comprar() {
         </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {formData.items.map((item, index) => (
-            <div key={index} className="grid gap-3 sm:grid-cols-[1fr_140px_auto] items-start">
-              <Select
-                name={`cafeId-${index}`}
-                value={item.cafeId}
-                onChange={e => handleItemChange(index, 'cafeId', e.target.value)}
-                options={cafesDisponibles.map(cafe => ({
-                  value: cafe.id,
-                  label: `${nombreCafe(cafe)} (${formatearKilos(kilosCafe(cafe, 'tostado'))} disp.)`,
-                }))}
-                placeholder="Seleccionar café"
-                error={errors[`item${index}_stock`]}
-              />
-              <Input
-                name={`kilos-${index}`}
-                type="number"
-                step="0.01"
-                min="0.01"
-                placeholder="Kilos"
-                value={item.kilos}
-                onChange={e => handleItemChange(index, 'kilos', e.target.value)}
-                error={errors[`item${index}_kilos`]}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => removeItem(index)}
-                disabled={formData.items.length === 1}
-                aria-label="Eliminar producto"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-          ))}
+          {formData.items.map((item, index) => {
+            const cafeSeleccionado = cafes.find(c => c.id === item.cafeId)
+            const presentaciones = presentacionesDeCafe(cafeSeleccionado)
+              .filter(p => p.disponible > 0)
+
+            return (
+              <div key={index} className="grid gap-3 sm:grid-cols-[1fr_150px_140px_auto] items-start">
+                <Select
+                  name={`cafeId-${index}`}
+                  value={item.cafeId}
+                  onChange={e => handleItemChange(index, 'cafeId', e.target.value)}
+                  options={cafesDisponibles.map(cafe => ({
+                    value: cafe.id,
+                    label: `${nombreCafe(cafe)} (${presentacionesDeCafe(cafe)
+                      .filter(p => p.disponible > 0)
+                      .map(p => `${formatearKilos(p.disponible)} ${p.valor}`)
+                      .join(' / ')})`,
+                  }))}
+                  placeholder="Seleccionar café"
+                  error={errors[`item${index}_stock`]}
+                />
+                <Select
+                  name={`presentacion-${index}`}
+                  value={item.presentacion}
+                  onChange={e => handleItemChange(index, 'presentacion', e.target.value)}
+                  options={presentaciones.map(p => ({
+                    value: p.valor,
+                    label: `${p.etiqueta} (${formatearKilos(p.disponible)})`,
+                  }))}
+                  placeholder="Presentación"
+                  disabled={!item.cafeId}
+                />
+                <Input
+                  name={`kilos-${index}`}
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="Kilos"
+                  value={item.kilos}
+                  onChange={e => handleItemChange(index, 'kilos', e.target.value)}
+                  error={errors[`item${index}_kilos`]}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeItem(index)}
+                  disabled={formData.items.length === 1}
+                  aria-label="Eliminar producto"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            )
+          })}
 
           {errors.items && <p className="text-sm text-red-600">{errors.items}</p>}
 

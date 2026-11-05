@@ -19,6 +19,7 @@ from app.modules.inventario.models import (
     BlendHasTipoDeCafe,
     Lote,
     LoteEstado,
+    LoteTipo,
     TipoDeCafe,
 )
 from app.modules.inventario.schemas import (
@@ -203,8 +204,11 @@ def _escribir_composicion(db: Session, blend: Blend, items: list[BlendComposicio
 # Lote
 # ---------------------------------------------------------------------------
 def obtener_lote(db: Session, lote_id: int) -> Lote | None:
-    """Devuelve el lote con ese ``id``, o ``None`` si no existe."""
-    return db.get(Lote, lote_id)
+    """Devuelve el lote activo con ese ``id``, o ``None`` si no existe o está archivado."""
+    lote = db.get(Lote, lote_id)
+    if lote is None or lote.archivado:
+        return None
+    return lote
 
 
 def existe_registro(db: Session, entidad: type, entidad_id: int) -> bool:
@@ -294,7 +298,7 @@ def listar_lotes(
     Si ambos parámetros son None, devuelve todos los lotes.
     No valida que el ID corresponda a un registro existente.
     """
-    query = select(Lote)
+    query = select(Lote).where(Lote.archivado.is_(False))
     
     if tipo_de_cafe_id is not None:
         query = query.where(Lote.tipo_de_cafe_id == tipo_de_cafe_id)
@@ -302,6 +306,26 @@ def listar_lotes(
         query = query.where(Lote.blend_id == blend_id)
     
     return db.execute(query.order_by(Lote.id)).scalars().all()
+
+
+def listar_lotes_verdes_fifo(db: Session, tipo_de_cafe_id: int) -> list[Lote]:
+    """Devuelve los lotes VERDE abiertos con stock, del más antiguo al más nuevo.
+
+    El criterio FIFO es la fecha de vencimiento y, para desempatar, el ``id``
+    de alta del lote. Los lotes cerrados o sin stock no participan del consumo.
+    """
+    return db.execute(
+        select(Lote)
+        .where(
+            Lote.tipo_de_cafe_id == tipo_de_cafe_id,
+            Lote.tipo == LoteTipo.VERDE,
+            Lote.estado == LoteEstado.ABIERTO,
+            Lote.kg_disponibles > 0,
+            Lote.archivado.is_(False),
+        )
+        .order_by(Lote.fecha_vencimiento, Lote.id)
+        .with_for_update()
+    ).scalars().all()
 
 
 def listar_tipos_de_cafe(db: Session) -> list[TipoDeCafe]:

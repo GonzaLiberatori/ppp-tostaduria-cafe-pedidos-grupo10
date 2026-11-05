@@ -17,6 +17,7 @@ from app.modules.envios.router import router as envios_router
 from app.modules.gastos.router import router as gastos_router
 from app.modules.inventario.router import router as inventario_router
 from app.modules.pedidos.router import router as pedidos_router
+from app.modules.produccion.router import router as produccion_router
 from app.modules.ventas.router import router as ventas_router
 from app.tasks.scheduler import detener_scheduler, iniciar_scheduler
 
@@ -70,6 +71,10 @@ app.include_router(gastos_router, prefix=settings.API_V1_STR)
 app.include_router(
     inventario_router,
     prefix=f"{settings.API_V1_STR}/inventario",
+)
+app.include_router(
+    produccion_router,
+    prefix=f"{settings.API_V1_STR}/produccion",
 )
 
 

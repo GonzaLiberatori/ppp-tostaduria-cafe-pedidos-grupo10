@@ -29,8 +29,14 @@ export default function LoteCard({ lote, ordenTuesteId, onEdit, onDelete }) {
       </div>
 
       <p className="mt-2 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
-        {formatearKilos(lote.kilos)}
+        {formatearKilos(lote.kgDisponibles ?? lote.kilos)}
       </p>
+      {lote.kgDisponibles != null &&
+        Number(lote.kgDisponibles) !== Number(lote.kilos) && (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            de {formatearKilos(lote.kilos)} reales
+          </p>
+        )}
 
       <div className="mt-2 space-y-1 text-xs text-[var(--color-text-muted)]">
         <p className="flex items-center gap-1.5">

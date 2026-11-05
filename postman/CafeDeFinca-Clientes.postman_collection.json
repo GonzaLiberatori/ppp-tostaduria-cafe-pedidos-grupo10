@@ -1,0 +1,680 @@
+{
+  "info": {
+    "name": "Café de Finca — Clientes",
+    "description": "Colección del módulo **Clientes**: padrón del panel y autoservicio del portal.\n\n## Cómo usarla\n\n1. Importar esta colección y el environment `CafeDeFinca`.\n2. Ejecutar **Preparación → Login — Administrador** (`{{adminEmail}}` /\n   `{{adminPassword}}`). Guarda el token en `{{token}}`.\n3. Ejecutar **Preparación → Login — Cliente** (`{{clienteEmail}}` /\n   `{{clientePassword}}`). Guarda el token en `{{tokenCliente}}`, que usan\n   `GET /clientes/me` y `PATCH /clientes/me`.\n4. Recorrer la carpeta **Clientes** de arriba hacia abajo: primero los `GET`\n   (completan `{{clienteId}}`), después el alta y las ediciones, y al final el\n   borrado.\n\n## Encadenamiento\n\n- `GET /clientes/` guarda el primer id en `{{clienteId}}` solo si está vacío.\n- `POST /clientes/` guarda el id del cliente creado en `{{clienteId}}`.\n- `PATCH` y `DELETE` usan `{{clienteId}}`.\n\n## Roles\n\n- Lectura del padrón: Administrador, Cajero u Operario.\n- Alta y edición: Administrador o Cajero.\n- Baja: solo Administrador.\n- `/clientes/me`: cualquier cuenta con cliente asociado (portal).\n\nSi una request devuelve **403**, el token activo no tiene el rol necesario;\nvolvé a ejecutar el login que corresponda.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tokenCliente",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@cafedefinca.com",
+      "type": "string"
+    },
+    {
+      "key": "adminPassword",
+      "value": "admin123",
+      "type": "string"
+    },
+    {
+      "key": "clienteEmail",
+      "value": "cliente@cafedefinca.com",
+      "type": "string"
+    },
+    {
+      "key": "clientePassword",
+      "value": "cliente123",
+      "type": "string"
+    },
+    {
+      "key": "clienteId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tokenOperario",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Preparación",
+      "description": "Ejecutá estos logins antes que el resto. Cada uno guarda su token: Administrador en `{{token}}`, Operario en `{{tokenOperario}}` y Cliente en `{{tokenCliente}}`.",
+      "item": [
+        {
+          "name": "Login — Administrador",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Login\n\n**Endpoint:** `POST /api/v1/auth/login`\n**Auth:** no requiere token.\n**Respuestas documentadas:** 200, 422.\n**Credenciales:** `{{adminEmail}}` / `{{adminPassword}}`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.access_token) {",
+                  "    pm.collectionVariables.set(\"token\", data.access_token);",
+                  "    pm.test(\"Token guardado en {{token}}\", () => pm.expect(data.access_token).to.be.a(\"string\"));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "auth",
+                    "login"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"access_token\": \"string\",\n  \"token_type\": \"string\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Login — Cliente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Login\n\n**Endpoint:** `POST /api/v1/auth/login`\n**Auth:** no requiere token.\n**Respuestas documentadas:** 200, 422.\n**Credenciales:** `{{clienteEmail}}` / `{{clientePassword}}`.\n**Guarda el token en** `{{tokenCliente}}`, que usan los endpoints del portal.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{clienteEmail}}\",\n  \"password\": \"{{clientePassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.access_token) {",
+                  "    pm.collectionVariables.set(\"tokenCliente\", data.access_token);",
+                  "    pm.test(\"Token de cliente guardado en {{tokenCliente}}\", () => pm.expect(data.access_token).to.be.a(\"string\"));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "auth",
+                    "login"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"access_token\": \"string\",\n  \"token_type\": \"string\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Clientes",
+      "description": "Padrón de clientes del panel y autoservicio del portal. El Cliente solo puede ver y editar su propio perfil (`/clientes/me`).",
+      "item": [
+        {
+          "name": "GET /clientes/",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes"
+              ]
+            },
+            "description": "Listar Clientes\n\nLista los clientes del panel. Reservado al personal interno.\n\n**Endpoint:** `GET /api/v1/clientes/`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "const elementos = Array.isArray(data) ? data : [data];",
+                  "const valores = elementos",
+                  "    .filter((elemento) => elemento && typeof elemento === \"object\")",
+                  "    .map((elemento) => elemento.id);",
+                  "const valor = valores.find(",
+                  "    (v) => v !== null && v !== undefined && String(v) !== \"\"",
+                  ");",
+                  "if (valor !== undefined && !pm.collectionVariables.get(\"clienteId\")) { pm.collectionVariables.set(\"clienteId\", String(valor)); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/clientes/",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "clientes"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"id\": \"1\",\n    \"nombre\": \"Café de Prueba\",\n    \"tipo\": \"B2B\",\n    \"telefono\": \"\",\n    \"email\": \"\",\n    \"direccion\": \"\",\n    \"kilosComprados\": 0,\n    \"tieneDeuda\": false,\n    \"montoDeuda\": 0,\n    \"limiteCredito\": 1000.0,\n    \"creadoEn\": \"2026-01-15T10:00:00\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "GET /clientes/me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes",
+                "me"
+              ]
+            },
+            "description": "Obtener Mi Perfil\n\nDevuelve el perfil del cliente vinculado a la cuenta autenticada.\n\n**Endpoint:** `GET /api/v1/clientes/me`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 200.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenCliente}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/clientes/me",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "clientes",
+                    "me"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"1\",\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2B\",\n  \"telefono\": \"\",\n  \"email\": \"\",\n  \"direccion\": \"\",\n  \"kilosComprados\": 0,\n  \"tieneDeuda\": false,\n  \"montoDeuda\": 0,\n  \"limiteCredito\": 1000.0,\n  \"creadoEn\": \"2026-01-15T10:00:00\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /clientes/:cliente_id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/:cliente_id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes",
+                ":cliente_id"
+              ],
+              "variable": [
+                {
+                  "key": "cliente_id",
+                  "value": "{{clienteId}}",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Obtener Cliente\n\nDevuelve un cliente por id; el Cliente solo puede ver el propio.\n\n**Endpoint:** `GET /api/v1/clientes/{cliente_id}`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 200, 422."
+          },
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/clientes/{cliente_id}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "clientes",
+                    ":cliente_id"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"1\",\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2B\",\n  \"telefono\": \"\",\n  \"email\": \"\",\n  \"direccion\": \"\",\n  \"kilosComprados\": 0,\n  \"tieneDeuda\": false,\n  \"montoDeuda\": 0,\n  \"limiteCredito\": 1000.0,\n  \"creadoEn\": \"2026-01-15T10:00:00\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /clientes/",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes"
+              ]
+            },
+            "description": "Crear Cliente\n\nCrea un cliente y su persona (y su acceso al portal si se envía password).\n\n**Endpoint:** `POST /api/v1/clientes/`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 201, 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2C\",\n  \"telefono\": \"11{{$randomInt}}\",\n  \"email\": \"{{$randomEmail}}\",\n  \"direccion\": \"Calle Falsa 123\",\n  \"tieneDeuda\": false,\n  \"montoDeuda\": 1000.0,\n  \"limiteCredito\": 1000.0,\n  \"password\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data && data.id !== undefined) { pm.collectionVariables.set(\"clienteId\", String(data.id)); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Ejemplo 201",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/clientes/",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "clientes"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"1\",\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2B\",\n  \"telefono\": \"\",\n  \"email\": \"\",\n  \"direccion\": \"\",\n  \"kilosComprados\": 0,\n  \"tieneDeuda\": false,\n  \"montoDeuda\": 0,\n  \"limiteCredito\": 1000.0,\n  \"creadoEn\": \"2026-01-15T10:00:00\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "PATCH /clientes/me",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes",
+                "me"
+              ]
+            },
+            "description": "Actualizar Mi Perfil\n\nPermite al cliente editar sus propios datos de contacto y entrega.\n\n**Endpoint:** `PATCH /api/v1/clientes/me`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 200, 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Café de Prueba\",\n  \"direccion\": \"Calle Falsa 123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenCliente}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/clientes/me",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "clientes",
+                    "me"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"1\",\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2B\",\n  \"telefono\": \"\",\n  \"email\": \"\",\n  \"direccion\": \"\",\n  \"kilosComprados\": 0,\n  \"tieneDeuda\": false,\n  \"montoDeuda\": 0,\n  \"limiteCredito\": 1000.0,\n  \"creadoEn\": \"2026-01-15T10:00:00\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "PATCH /clientes/:cliente_id",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/:cliente_id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes",
+                ":cliente_id"
+              ],
+              "variable": [
+                {
+                  "key": "cliente_id",
+                  "value": "{{clienteId}}",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Actualizar Cliente\n\nEdita los campos enviados de un cliente desde el panel.\n\n**Endpoint:** `PATCH /api/v1/clientes/{cliente_id}`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 200, 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2B\",\n  \"direccion\": \"Calle Falsa 123\",\n  \"tieneDeuda\": true,\n  \"montoDeuda\": 1000.0,\n  \"limiteCredito\": 1000.0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "Ejemplo 200",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/clientes/{cliente_id}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "clientes",
+                    ":cliente_id"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"1\",\n  \"nombre\": \"Café de Prueba\",\n  \"tipo\": \"B2B\",\n  \"telefono\": \"\",\n  \"email\": \"\",\n  \"direccion\": \"\",\n  \"kilosComprados\": 0,\n  \"tieneDeuda\": false,\n  \"montoDeuda\": 0,\n  \"limiteCredito\": 1000.0,\n  \"creadoEn\": \"2026-01-15T10:00:00\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE /clientes/:cliente_id",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clientes/:cliente_id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "clientes",
+                ":cliente_id"
+              ],
+              "variable": [
+                {
+                  "key": "cliente_id",
+                  "value": "{{clienteId}}",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Eliminar Cliente\n\nElimina un cliente sin pedidos asociados.\n\n**Endpoint:** `DELETE /api/v1/clientes/{cliente_id}`\n**Auth:** requiere token. Sin restricción de rol; el alcance depende de la cuenta (el portal solo accede a sus propios datos).\n**Respuestas documentadas:** 204, 422."
+          }
+        }
+      ]
+    }
+  ]
+}

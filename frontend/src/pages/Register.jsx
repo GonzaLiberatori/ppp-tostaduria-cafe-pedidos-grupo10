@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { useData } from '../context/DataContext'
 import { Eye, EyeOff, User, Mail, Lock } from 'lucide-react'
 import Button from '../components/ui/Button'
 import AuthShell from '../components/layout/AuthShell'
@@ -51,7 +50,6 @@ function CampoTexto({ id, label, icon: Icon, error, ...props }) {
 
 export default function Register() {
   const { register } = useAuth()
-  const { addCliente } = useData()
   const navigate = useNavigate()
   const [form, setForm] = useState({
     nombre: '',
@@ -72,7 +70,7 @@ export default function Register() {
     setErrores(prev => (prev[campo] ? { ...prev, [campo]: undefined } : prev))
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setErrorGeneral('')
 
@@ -83,7 +81,7 @@ export default function Register() {
     }
 
     setLoading(true)
-    const result = register(form)
+    const result = await register(form)
     setLoading(false)
 
     if (!result.success) {
@@ -95,19 +93,7 @@ export default function Register() {
       return
     }
 
-    // Alta en el padrón de clientes con el mismo id que usa la sesión.
-    addCliente({
-      id: result.user.clienteId,
-      nombre: form.nombre.trim(),
-      tipo: 'B2C',
-      kilosComprados: 0,
-      tieneDeuda: false,
-      montoDeuda: 0,
-      telefono: '',
-      email: form.email.trim(),
-      direccion: 'Sin especificar',
-    })
-
+    // El backend ya crea la persona y el cliente al registrar la cuenta.
     navigate('/cliente')
   }
 

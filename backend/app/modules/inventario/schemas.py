@@ -26,7 +26,7 @@ from app.modules.inventario.models import Blend, LoteEstado, LoteTipo
 # silencioso de MySQL (ver design.md, Decisions).
 # ---------------------------------------------------------------------------
 PrecioPorKgVerde = Annotated[Decimal, Field(max_digits=10, decimal_places=2, gt=0)]
-Kilos = Annotated[Decimal, Field(max_digits=10, decimal_places=2, ge=0)]
+Kilos = Annotated[Decimal, Field(max_digits=12, decimal_places=3, ge=0)]
 HumedadPorcentaje = Annotated[Decimal, Field(max_digits=5, decimal_places=2, ge=0, le=100)]
 PorcentajeBlend = Annotated[Decimal, Field(max_digits=5, decimal_places=2, gt=0)]
 

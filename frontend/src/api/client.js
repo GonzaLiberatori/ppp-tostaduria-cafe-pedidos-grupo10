@@ -6,6 +6,7 @@
  */
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1/inventario'
+const CLAVE_TOKEN = 'auth_token'
 
 /**
  * Error personalizado para respuestas HTTP con error.
@@ -25,10 +26,12 @@ export class ApiError extends Error {
  */
 async function request(method, path, body = null) {
   const url = `${BASE_URL}${path}`
+  const token = localStorage.getItem(CLAVE_TOKEN)
   const config = {
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   }
 
@@ -47,6 +50,12 @@ async function request(method, path, body = null) {
     const data = await response.json()
 
     if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem(CLAVE_TOKEN)
+        localStorage.removeItem('user')
+        window.dispatchEvent(new Event('auth:expirada'))
+      }
+
       // FastAPI devuelve { detail: "..." } o { detail: [{ msg, loc, type }] }
       const detail = typeof data.detail === 'string'
         ? data.detail

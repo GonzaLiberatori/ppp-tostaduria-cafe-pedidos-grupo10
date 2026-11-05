@@ -504,7 +504,7 @@ class TestAnularVenta:
         assert anulada.numero_comprobante == venta_confirmada.numero_comprobante
         assert len(anulada.pagos) == 1
 
-    def test_no_modifica_stock_ni_saldo(
+    def test_anulacion_devuelve_el_stock_y_no_toca_el_saldo(
         self, db_session, venta_confirmada, pedido_entregado_b2b
     ) -> None:
         stock_previo = _kilos_por_lote(db_session)
@@ -515,7 +515,10 @@ class TestAnularVenta:
             schemas.VentaAnulacionCreate(motivo="Error"),
         )
 
-        assert _kilos_por_lote(db_session) == stock_previo
+        assert _kilos_por_lote(db_session) == {
+            lote_id: kilos + Decimal("10")
+            for lote_id, kilos in stock_previo.items()
+        }
         assert _saldo_cliente(db_session, pedido_entregado_b2b) == saldo_previo
 
     def test_doble_anulacion_es_rechazada(
@@ -545,12 +548,33 @@ class TestAnularVenta:
         service.anular_venta(
             venta_confirmada.id, schemas.VentaAnulacionCreate(motivo="Error")
         )
+        stock_tras_anular = _kilos_por_lote(db_session)
 
         nueva = service.registrar_venta(_datos_venta(pedido_entregado_b2b))
 
         assert nueva.id != venta_confirmada.id
         assert nueva.estado == VentaEstado.CONFIRMADA
         assert nueva.numero_comprobante != venta_confirmada.numero_comprobante
+        assert _kilos_por_lote(db_session) == {
+            lote_id: kilos - Decimal("10")
+            for lote_id, kilos in stock_tras_anular.items()
+        }
+
+    def test_segunda_anulacion_vuelve_a_devolver_el_stock(
+        self, db_session, venta_confirmada, pedido_entregado_b2b
+    ) -> None:
+        service = services.VentaService(db_session)
+        service.anular_venta(
+            venta_confirmada.id, schemas.VentaAnulacionCreate(motivo="Error")
+        )
+        stock_original = _kilos_por_lote(db_session)
+
+        nueva = service.registrar_venta(_datos_venta(pedido_entregado_b2b))
+        service.anular_venta(
+            nueva.id, schemas.VentaAnulacionCreate(motivo="Error de nuevo")
+        )
+
+        assert _kilos_por_lote(db_session) == stock_original
 
     def test_anular_pagare_revierte_la_deuda(
         self, db_session, pedido_entregado_b2b

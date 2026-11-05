@@ -11,6 +11,7 @@ from app.core.database import Base
 from app.modules.inventario import crud, services
 from app.modules.inventario.models import Blend, Lote, LoteEstado, LoteTipo, TipoDeCafe
 from app.modules.inventario.schemas import LoteCreate, LoteRead, LoteUpdate
+from app.modules.produccion.models import ConsumoTueste, OrdenTueste
 
 PAYLOAD: dict[str, object] = {
     "tipo": "VERDE",
@@ -241,6 +242,37 @@ def test_actualizar_con_kg_reales_negativos_falla_en_el_borde(db, origen):
     assert services.obtener_lote(db, creado.id).kg_reales == Decimal("59.80")
 
 
+def test_actualizar_kg_reales_por_debajo_de_los_disponibles_falla(db, origen):
+    creado = _dar_de_alta(db)
+
+    with pytest.raises(services.KgDisponiblesExcedeKgReales):
+        services.actualizar_lote(db, creado.id, LoteUpdate(kg_reales="10"))
+
+    leido = services.obtener_lote(db, creado.id)
+    assert leido.kg_reales == Decimal("59.80")
+    assert leido.kg_disponibles == Decimal("59.80")
+
+
+def test_actualizar_kg_disponibles_por_encima_de_los_reales_falla(db, origen):
+    creado = _dar_de_alta(db)
+
+    with pytest.raises(services.KgDisponiblesExcedeKgReales):
+        services.actualizar_lote(db, creado.id, LoteUpdate(kg_disponibles="60"))
+
+    assert services.obtener_lote(db, creado.id).kg_disponibles == Decimal("59.80")
+
+
+def test_actualizar_ambos_kilos_de_forma_coherente(db, origen):
+    creado = _dar_de_alta(db)
+
+    leido = services.actualizar_lote(
+        db, creado.id, LoteUpdate(kg_reales="30", kg_disponibles="12")
+    )
+
+    assert leido.kg_reales == Decimal("30")
+    assert leido.kg_disponibles == Decimal("12")
+
+
 # ---------------------------------------------------------------------------
 # 3.5 Eliminar
 # ---------------------------------------------------------------------------
@@ -251,6 +283,59 @@ def test_eliminar_sin_referencias_borra_el_lote(db, origen):
 
     assert _hay_lotes(db) == 0
     assert crud.obtener_lote(db, creado.id) is None
+
+
+def test_eliminar_lote_consumido_lo_archiva_sin_perder_trazabilidad(db, origen):
+    creado = _dar_de_alta(db)
+    orden = OrdenTueste(
+        kg_gastados=Decimal("1.000"),
+        kg_obtenidos=Decimal("0.850"),
+        tipo_de_cafe_id=origen,
+    )
+    db.add(orden)
+    db.flush()
+    db.add(
+        ConsumoTueste(
+            orden_tueste_id=orden.id,
+            lote_id=creado.id,
+            kg_consumidos=Decimal("1.000"),
+        )
+    )
+    lote = crud.obtener_lote(db, creado.id)
+    lote.kg_disponibles = Decimal("0")
+    db.commit()
+
+    services.eliminar_lote(db, creado.id)
+
+    archivado = db.get(Lote, creado.id)
+    assert archivado is not None
+    assert archivado.archivado is True
+    assert crud.obtener_lote(db, creado.id) is None
+    assert services.listar_lotes(db, tipo_de_cafe_id=origen) == []
+    assert _hay_lotes(db) == 1
+
+
+def test_eliminar_lote_generado_por_tueste_lo_archiva(db, origen):
+    orden = OrdenTueste(
+        kg_gastados=Decimal("1.000"),
+        kg_obtenidos=Decimal("0.850"),
+        tipo_de_cafe_id=origen,
+    )
+    db.add(orden)
+    db.commit()
+    creado = _dar_de_alta(
+        db,
+        tipo="TOSTADO",
+        orden_tueste_id=orden.id,
+        kg_reales="0.850",
+    )
+
+    services.eliminar_lote(db, creado.id)
+
+    archivado = db.get(Lote, creado.id)
+    assert archivado is not None
+    assert archivado.archivado is True
+    assert _hay_lotes(db) == 1
 
 
 def test_eliminar_con_id_inexistente_lanza_no_encontrado(db):

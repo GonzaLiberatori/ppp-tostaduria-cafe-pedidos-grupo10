@@ -119,6 +119,12 @@ export const api = {
     autenticado: false,
     manejar401: false,
   }),
+  register: (datos) => request('/auth/register', {
+    method: 'POST',
+    body: datos,
+    autenticado: false,
+    manejar401: false,
+  }),
   me: () => request('/auth/me'),
 
   // Pedidos del panel
@@ -134,6 +140,15 @@ export const api = {
   createCliente: (data) => request('/clientes/', { method: 'POST', body: data }),
   updateCliente: (id, data) => request(`/clientes/${id}`, { method: 'PATCH', body: data }),
   deleteCliente: (id) => request(`/clientes/${id}`, { method: 'DELETE' }),
+
+  // Inventario (endpoints canónicos usados por tueste)
+  getTiposDeCafe: () => request('/inventario/tipos-de-cafe'),
+  getLotes: (params = {}) => request(conQuery('/inventario/lotes', params)),
+  getLote: (id) => request(`/inventario/lotes/${id}`),
+
+  // Producción
+  getTuestes: () => request('/produccion/tuestes'),
+  createTueste: (data) => request('/produccion/tuestes', { method: 'POST', body: data }),
 
   // Inventario (contrato plano del panel)
   getStock: () => request('/inventario/stock'),

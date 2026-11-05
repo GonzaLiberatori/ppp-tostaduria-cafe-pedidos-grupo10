@@ -9,6 +9,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Stock from './pages/Stock'
+import Tueste from './pages/Tueste'
 import Clientes from './pages/Clientes'
 import Pedidos from './pages/Pedidos'
 import Contabilidad from './pages/Contabilidad'
@@ -88,6 +89,11 @@ function AppRoutes() {
         <Route path="/stock" element={
           <ProtectedRoute allowedRoles={['admin', 'empleado']}>
             <Stock />
+          </ProtectedRoute>
+        } />
+        <Route path="/tueste" element={
+          <ProtectedRoute allowedRoles={['admin', 'empleado']}>
+            <Tueste />
           </ProtectedRoute>
         } />
         <Route path="/clientes" element={

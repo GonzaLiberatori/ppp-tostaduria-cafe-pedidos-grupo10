@@ -3,12 +3,20 @@ import { useData } from '../../context/DataContext'
 import { useAuth } from '../../context/AuthContext'
 import { FRECUENCIA_SUSCRIPCION, MEDIOS_PAGO } from '../../data/constants'
 import { formatearMoneda, formatearKilos } from '../../utils/formatters'
-import { formatearFecha } from '../../utils/formatters'
-import { nombreCafe, kilosCafe } from '../../utils/cafes'
+import { nombreCafe, kilosCafe, stockIdDeCafe } from '../../utils/cafes'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import { Clock, Package, AlertTriangle } from 'lucide-react'
+
+const FORM_INICIAL = {
+  cafeId: '',
+  kilos: '',
+  frecuencia: 'semanal',
+  medioPago: 'transferencia',
+  observaciones: '',
+  comprobante: null,
+}
 
 export default function Suscripciones() {
   const { addPedido, cafes } = useData()
@@ -18,31 +26,27 @@ export default function Suscripciones() {
 
   // El portal solo vende café tostado; el verde es materia prima interna.
   const cafesDisponibles = useMemo(
-    () => stock.filter(item => item.tipo === 'tostado' && kilosDeStock(item) > 0),
-    [stock, kilosDeStock],
+    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
+    [cafes],
   )
 
-  const [formData, setFormData] = useState({
-    cafeId: '',
-    kilos: '',
-    frecuencia: 'semanal',
-    medioPago: 'transferencia',
-    observaciones: '',
-  })
+  const [formData, setFormData] = useState(FORM_INICIAL)
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [enviado, setEnviado] = useState(false)
 
-  const clienteId = user?.clienteId
-
-  // Solo cafés con café tostado disponible para entregas recurrentes
-  const cafesDisponibles = useMemo(
-    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
-    [cafes]
-  )
-
   const cafeSeleccionado = cafes.find(c => c.id === formData.cafeId)
+
+  const etiquetaFrecuencia = FRECUENCIA_SUSCRIPCION
+    .find(opcion => opcion.value === formData.frecuencia)?.label || '—'
+  const etiquetaPago = MEDIOS_PAGO
+    .find(opcion => opcion.value === formData.medioPago)?.label || '—'
+
+  const totalEstimado = useMemo(() => {
+    const kilos = parseFloat(formData.kilos) || 0
+    return kilos * (cafeSeleccionado?.precioKg || 0)
+  }, [formData.kilos, cafeSeleccionado])
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -50,10 +54,19 @@ export default function Suscripciones() {
     if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }))
   }
 
+  const handleFileChange = (e) => {
+    const archivo = e.target.files?.[0] || null
+    setFormData(prev => ({ ...prev, comprobante: archivo }))
+    if (errors.comprobante) setErrors(prev => ({ ...prev, comprobante: '' }))
+  }
+
   const validate = () => {
     const newErrors = {}
-    if (!formData.cafeId) newErrors.cafeId = 'Selecciona un tipo de café'
-    if (!formData.kilos || parseFloat(formData.kilos) <= 0) newErrors.kilos = 'Kilos inválidos'
+    if (!clienteId) newErrors.cliente = 'La cuenta no está vinculada a un cliente.'
+    if (!formData.cafeId) newErrors.cafeId = 'Seleccioná un tipo de café'
+    if (!formData.kilos || parseFloat(formData.kilos) <= 0) {
+      newErrors.kilos = 'Kilos inválidos'
+    }
     if (formData.medioPago === 'transferencia' && !formData.comprobante) {
       newErrors.comprobante = 'Debe adjuntar el comprobante de transferencia'
     }
@@ -69,26 +82,22 @@ export default function Suscripciones() {
     setSubmitting(true)
     setSubmitError('')
 
-    const kilos = parseFloat(formData.kilos)
-    const precioKg = cafeSeleccionado?.precioKg || 0
-    const total = kilos * precioKg
-
-    const pedido = {
-      clienteId: String(clienteId),
-      estado: 'Pendiente',
-      medioContacto: 'Email',
-      observaciones,
-      items: [
-        {
-          cafeId: formData.cafeId,
-          nombre: nombreCafe(cafeSeleccionado),
-          kilos,
-          precioKg,
-        },
-      ],
-    }
-
     try {
+      const kilos = parseFloat(formData.kilos)
+      const pedido = {
+        clienteId: String(clienteId),
+        estado: 'Pendiente',
+        medioContacto: 'Email',
+        observaciones: formData.observaciones.trim(),
+        items: [
+          {
+            // El backend calcula el precio a partir del producto de stock.
+            stockId: stockIdDeCafe(cafeSeleccionado),
+            kilos,
+          },
+        ],
+      }
+
       await addPedido(pedido)
       setEnviado(true)
     } catch (err) {
@@ -99,13 +108,7 @@ export default function Suscripciones() {
   }
 
   const reiniciarFormulario = () => {
-    setFormData({
-      stockId: '',
-      kilos: '',
-      frecuencia: 'semanal',
-      medioPago: 'transferencia',
-      observaciones: '',
-    })
+    setFormData(FORM_INICIAL)
     setErrors({})
     setSubmitError('')
     setEnviado(false)
@@ -132,7 +135,7 @@ export default function Suscripciones() {
             </div>
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Kilos por entrega</p>
-              <p className="font-medium">{formatearKilos(formData.kilos)}</p>
+              <p className="font-medium">{formatearKilos(parseFloat(formData.kilos) || 0)}</p>
             </div>
             <div>
               <p className="text-sm text-[var(--color-text-muted)]">Frecuencia</p>
@@ -143,7 +146,7 @@ export default function Suscripciones() {
               <p className="font-medium">{etiquetaPago}</p>
             </div>
           </div>
-          <Button onClick={reiniciarFormulario}>Nueva suscripción</Button>
+          <Button onClick={reiniciarFormulario} className="mt-6">Nueva suscripción</Button>
         </div>
       </div>
     )
@@ -225,65 +228,21 @@ export default function Suscripciones() {
                 <AlertTriangle className="w-4 h-4 text-amber-600" />
                 <span className="font-medium text-amber-800">Comprobante obligatorio</span>
               </div>
-
-              <Select
-                label="Frecuencia *"
-                name="frecuencia"
-                value={formData.frecuencia}
-                onChange={handleChange}
-                options={FRECUENCIA_SUSCRIPCION}
-                placeholder="Seleccionar frecuencia"
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-[var(--color-text-muted)] file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-coffee-500 file:text-white hover:file:bg-coffee-600"
               />
-
-              <Select
-                label="Medio de pago *"
-                name="medioPago"
-                value={formData.medioPago}
-                onChange={handleChange}
-                options={MEDIOS_PAGO}
-                placeholder="Seleccionar medio de pago"
-              />
-
-              <Input
-                label="Observaciones"
-                name="observaciones"
-                value={formData.observaciones}
-                onChange={handleChange}
-                placeholder="Días preferidos de entrega, referencias, etc."
-                multiline
-                rows={2}
-              />
-
-              <div className="bg-coffee-500/5 border border-coffee-500/20 rounded-lg p-4 mt-2">
-                <div className="grid gap-2 sm:grid-cols-2 text-sm">
-                  <div>
-                    <span className="text-[var(--color-text-secondary)]">Total estimado por entrega:</span>
-                    <span className="font-medium text-[var(--color-text-primary)] ml-2">
-                      {formatearMoneda(totalEstimado)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[var(--color-text-secondary)]">Estado:</span>
-                    <span className="font-medium text-[var(--color-text-primary)] ml-2">Pendiente de aprobación</span>
-                  </div>
-                </div>
-                <p className="text-xs text-[var(--color-text-muted)] mt-3">
-                  El precio final lo calcula el sistema al generar cada pedido.
+              {formData.comprobante && (
+                <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
+                  Adjunto: {formData.comprobante.name}
                 </p>
-              </div>
-
-              {errors.cliente && (
-                <p className="form-error" role="alert">{errors.cliente}</p>
               )}
-              {submitError && (
-                <p className="form-error" role="alert">{submitError}</p>
+              {errors.comprobante && (
+                <p className="form-error" role="alert">{errors.comprobante}</p>
               )}
-
-              <Button type="submit" variant="primary" loading={submitting} className="w-full py-3">
-                <Clock className="w-4 h-4 mr-2" />
-                Solicitar suscripción
-              </Button>
-            </>
+            </div>
           )}
 
           {formData.medioPago === 'efectivo' && (
@@ -309,7 +268,7 @@ export default function Suscripciones() {
             name="observaciones"
             value={formData.observaciones}
             onChange={handleChange}
-            placeholder="Notas adicionales..."
+            placeholder="Días preferidos de entrega, referencias, etc."
             multiline
             rows={2}
           />
@@ -319,9 +278,7 @@ export default function Suscripciones() {
               <div>
                 <span className="text-[var(--color-text-secondary)]">Total estimado:</span>
                 <span className="font-medium text-[var(--color-text-primary)] ml-2">
-                  {formData.cafeId && formData.kilos
-                    ? formatearMoneda(parseFloat(formData.kilos) * (cafeSeleccionado?.precioKg || 0))
-                    : formatearMoneda(0)}
+                  {formatearMoneda(totalEstimado)}
                 </span>
               </div>
               <div>
@@ -329,7 +286,17 @@ export default function Suscripciones() {
                 <span className="font-medium text-[var(--color-text-primary)] ml-2">Pendiente de aprobación</span>
               </div>
             </div>
+            <p className="text-xs text-[var(--color-text-muted)] mt-3">
+              El precio final lo calcula el sistema al generar cada pedido.
+            </p>
           </div>
+
+          {errors.cliente && (
+            <p className="form-error" role="alert">{errors.cliente}</p>
+          )}
+          {submitError && (
+            <p className="form-error" role="alert">{submitError}</p>
+          )}
 
           <Button type="submit" variant="primary" loading={submitting} className="w-full py-3">
             <Clock className="w-4 h-4 mr-2" />

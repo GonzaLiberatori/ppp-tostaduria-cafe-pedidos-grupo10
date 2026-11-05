@@ -11,6 +11,7 @@ import { formatearMoneda, formatearKilos, formatearFecha } from '../utils/format
 import { nombreCafe, origenCafe, esOrganico, kilosCafe } from '../utils/cafes'
 import { TIPOS_CAFE, TIPOS_LOTE } from '../data/constants'
 import { Package, Plus, Filter, Trash2, Pencil, AlertTriangle, ChevronDown, ChevronUp, Coffee, Package2 } from 'lucide-react'
+import { useToast } from '../hooks/useToast.jsx'
 
 export default function Stock() {
   const {
@@ -41,7 +42,7 @@ export default function Stock() {
   const [formError, setFormError] = useState(null)
 
   const cafesPorId = useMemo(
-    () => Object.fromEntries(cafes.map(cafe => [cafe.id, cafe])),
+    () => Object.fromEntries(cafes.map(cafe => [cafe.entidadId, cafe])),
     [cafes]
   )
 

@@ -94,16 +94,22 @@ def create_orden_tueste(db: Session, orden: schemas.OrdenTuesteCreate) -> models
 
 # Lote
 def get_lote(db: Session, lote_id: int) -> Optional[models.Lote]:
-    return db.query(models.Lote).filter(models.Lote.id == lote_id).first()
+    return db.query(models.Lote).filter(
+        models.Lote.id == lote_id,
+        models.Lote.archivado.is_(False),
+    ).first()
 
 
 def get_lotes(db: Session, skip: int = 0, limit: int = 100) -> List[models.Lote]:
-    return db.query(models.Lote).offset(skip).limit(limit).all()
+    return db.query(models.Lote).filter(
+        models.Lote.archivado.is_(False)
+    ).offset(skip).limit(limit).all()
 
 
 def get_lotes_disponibles(db: Session, tipo: str = "TOSTADO") -> List[models.Lote]:
     return db.query(models.Lote).filter(
         models.Lote.tipo == tipo,
+        models.Lote.archivado.is_(False),
         models.Lote.estado == "ABIERTO",
         models.Lote.kg_disponibles > 0
     ).all()
@@ -266,6 +272,10 @@ def _calcular_precio_kg_detalle(db: Session, detalle_data: schemas.DetallePedido
     else:
         raise ValueError("Debe especificar tipo_de_cafe_id o blend_id")
     
+    # El café verde se vende como materia prima: solo el precio de origen.
+    if detalle_data.tipo_stock == models.LoteTipo.VERDE:
+        return precio_base
+    
     # Agregar valor de molienda
     if detalle_data.molienda_id:
         molienda = db.query(Molienda).filter(Molienda.id == detalle_data.molienda_id).first()
@@ -304,10 +314,12 @@ def delete_pedido(db: Session, pedido_id: int) -> bool:
     if db_pedido.estado == "PENDIENTE":
         detalles = get_detalles_by_pedido(db, pedido_id)
         for detalle in detalles:
+            tipo_stock = detalle.tipo_stock or models.LoteTipo.TOSTADO
             if detalle.tipo_de_cafe_id:
                 lotes = db.query(models.Lote).filter(
                     models.Lote.tipo_de_cafe_id == detalle.tipo_de_cafe_id,
-                    models.Lote.tipo == "TOSTADO",
+                    models.Lote.tipo == tipo_stock,
+                    models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                 ).order_by(models.Lote.fecha_vencimiento.desc()).all()
                 _devolver_stock_lotes(lotes, detalle.cantidad_kg)
@@ -315,7 +327,8 @@ def delete_pedido(db: Session, pedido_id: int) -> bool:
             if detalle.blend_id:
                 lotes = db.query(models.Lote).filter(
                     models.Lote.blend_id == detalle.blend_id,
-                    models.Lote.tipo == "TOSTADO",
+                    models.Lote.tipo == tipo_stock,
+                    models.Lote.archivado.is_(False),
                     models.Lote.estado.in_(["ABIERTO", "CERRADO"])
                 ).order_by(models.Lote.fecha_vencimiento.desc()).all()
                 _devolver_stock_lotes(lotes, detalle.cantidad_kg)
