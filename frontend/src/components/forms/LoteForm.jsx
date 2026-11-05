@@ -56,7 +56,7 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
     
     // En modo edición, no validar cafeId (el origen ya está definido)
     if (!isEdicion) {
-      const cafe = cafes.find(c => c.id === Number(formData.cafeId))
+      const cafe = cafes.find(c => c.id === formData.cafeId)
       if (!cafe) newErrors.cafeId = 'Seleccioná el café del lote'
     }
     

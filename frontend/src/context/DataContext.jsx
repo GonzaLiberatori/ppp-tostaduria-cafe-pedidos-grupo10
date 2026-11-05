@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { useAuth } from './AuthContext'
+import { api } from '../services/api'
 import { mockOrdenesTueste, mockClientes, mockPedidos, mockGastos } from '../data/mockData'
 import { kilosPorTipo } from '../utils/cafes'
 import {
@@ -29,6 +31,13 @@ const STORAGE_KEYS = {
   CLIENTES: 'cafe-finca-clientes',
   PEDIDOS: 'cafe-finca-pedidos',
   GASTOS: 'cafe-finca-gastos',
+}
+
+// Estado inicial de "Por cobrar" mientras la API no responde o falla.
+const POR_COBRAR_VACIO = {
+  items: [],
+  total_por_cobrar: 0,
+  cantidad_vencidas: 0,
 }
 
 function loadFromStorage(key, fallback) {
@@ -87,6 +96,7 @@ function consumirLotesFIFO(lotes = [], kilosAConsumir) {
 }
 
 export function DataProvider({ children }) {
+  const { user } = useAuth()
   const [cafes, setCafes] = useState([])
   const [clientes, setClientes] = useState(() => loadFromStorage(STORAGE_KEYS.CLIENTES, mockClientes))
   const [pedidos, setPedidos] = useState(() => loadFromStorage(STORAGE_KEYS.PEDIDOS, mockPedidos))
@@ -94,6 +104,31 @@ export function DataProvider({ children }) {
   const [ordenesTueste] = useState(mockOrdenesTueste)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [cargandoPorClave, setCargandoPorClave] = useState({})
+  const [ventas, setVentas] = useState([])
+  const [resumenVentasMensual, setResumenVentasMensual] = useState([])
+  const [cobranzaMensual, setCobranzaMensual] = useState([])
+  const [porCobrar, setPorCobrar] = useState(POR_COBRAR_VACIO)
+  const [isLoaded, setIsLoaded] = useState(false)
+  const [errors, setErrors] = useState({})
+
+  // Envuelve una acción async marcando/desmarcando el estado de carga por clave
+  // y capturando errores en el contexto. Devuelve una función lista para invocar.
+  const withLoading = useCallback((clave, asyncFn) => {
+    return async (...args) => {
+      setCargandoPorClave(prev => ({ ...prev, [clave]: true }))
+      setError(null)
+      try {
+        const resultado = await asyncFn(...args)
+        setCargandoPorClave(prev => ({ ...prev, [clave]: false }))
+        return resultado
+      } catch (err) {
+        setCargandoPorClave(prev => ({ ...prev, [clave]: false }))
+        setError(err)
+        throw err
+      }
+    }
+  }, [])
 
   // Cargar inventario desde la API al montar
   const cargarInventario = useCallback(async () => {
@@ -137,12 +172,91 @@ export function DataProvider({ children }) {
       setError(err.message || 'Error al cargar el inventario')
     } finally {
       setLoading(false)
+      setIsLoaded(true)
     }
   }, [])
 
+  const refrescarClientesSilencioso = useCallback(async () => {
+    try {
+      if (user?.role === 'cliente' && user?.clienteId) {
+        // El portal solo puede consultar su propio cliente.
+        const propio = await api.getCliente(user.clienteId)
+        setClientes(propio ? [propio] : [])
+        return
+      }
+      const respuesta = await api.getClientes()
+      setClientes(respuesta || [])
+    } catch (err) {
+      console.warn('No se pudo refrescar los clientes:', err)
+    }
+  }, [user])
+
+  const refrescarPedidos = useCallback(async () => {
+    try {
+      const respuesta = user?.role === 'cliente' && user?.clienteId
+        ? await api.getPedidosByCliente(user.clienteId)
+        : await api.getPedidos()
+      setPedidos(respuesta || [])
+    } catch (err) {
+      console.warn('No se pudo refrescar los pedidos:', err)
+    }
+  }, [user])
+
+  const refrescarGastos = useCallback(async () => {
+    try {
+      const respuesta = await api.getGastos()
+      setGastos(respuesta || [])
+    } catch (err) {
+      console.warn('No se pudo refrescar los gastos:', err)
+    }
+  }, [])
+
+  // El "stock" del panel son los cafés unificados (con sus lotes) que arma
+  // cargarInventario; por eso se refresca el inventario completo.
+  const refrescarStockYClientes = useCallback(async () => {
+    await Promise.all([cargarInventario(), refrescarClientesSilencioso()])
+  }, [cargarInventario, refrescarClientesSilencioso])
+
+  const refrescarVentas = useCallback(async () => {
+    if (!user || user.role === 'cliente') return
+    try {
+      const [ventasRes, resumenRes, cobranzaRes, porCobrarRes] = await Promise.all([
+        api.getVentas({ limit: 100 }),
+        api.getResumenMensualVentas(),
+        api.getCobranzaMensualVentas(),
+        api.getPorCobrarVentas(),
+      ])
+      setVentas(ventasRes || [])
+      setResumenVentasMensual(resumenRes || [])
+      setCobranzaMensual(cobranzaRes || [])
+      setPorCobrar(porCobrarRes || POR_COBRAR_VACIO)
+      setErrors(prev => ({ ...prev, contabilidad: null }))
+    } catch (err) {
+      setErrors(prev => ({ ...prev, contabilidad: err.message }))
+      throw err
+    }
+  }, [user])
+
   useEffect(() => {
+    if (!user) {
+      // Sin sesión no hay datos que cargar (el login se muestra igual).
+      setIsLoaded(true)
+      return
+    }
+
     cargarInventario()
-  }, [cargarInventario])
+    refrescarClientesSilencioso()
+    refrescarPedidos()
+    refrescarGastos()
+    refrescarVentas().catch(() => {})
+  }, [
+    user?.id,
+    cargarInventario,
+    refrescarClientesSilencioso,
+    refrescarPedidos,
+    refrescarGastos,
+    refrescarVentas,
+  ])
 
   // Guardar en localStorage solo clientes, pedidos, gastos
   useEffect(() => { saveToStorage(STORAGE_KEYS.CLIENTES, clientes) }, [clientes])
@@ -178,10 +292,10 @@ export function DataProvider({ children }) {
       let response
       if (cafe.tipoProducto === 'simple') {
         const payload = cafeSimpleToBackend({ ...cafe, ...updates })
-        response = await actualizarTipoDeCafe(id, payload)
+        response = await actualizarTipoDeCafe(cafe.entidadId, payload)
       } else {
         const payload = cafeBlendToBackend({ ...cafe, ...updates })
-        response = await actualizarBlend(id, payload)
+        response = await actualizarBlend(cafe.entidadId, payload)
       }
 
       await cargarInventario()
@@ -197,9 +311,9 @@ export function DataProvider({ children }) {
       if (!cafe) throw new Error('Café no encontrado')
 
       if (cafe.tipoProducto === 'simple') {
-        await eliminarTipoDeCafe(id)
+        await eliminarTipoDeCafe(cafe.entidadId)
       } else {
-        await eliminarBlend(id)
+        await eliminarBlend(cafe.entidadId)
       }
 
       await cargarInventario()
@@ -268,6 +382,12 @@ export function DataProvider({ children }) {
     return newCliente
   }, [])
 
+  const updateCliente = withLoading('clientes', async (id, cambios) => {
+    const actualizado = await api.updateCliente(id, cambios)
+    setClientes(prev => prev.map(item => item.id === id ? actualizado : item))
+    return actualizado
+  })
+
   const deleteCliente = withLoading('clientes', async (id) => {
     await api.deleteCliente(id)
     setClientes(prev => prev.filter(item => item.id !== id))
@@ -334,6 +454,13 @@ export function DataProvider({ children }) {
     return venta
   })
 
+  const anularVenta = withLoading('ventas', async (id, motivo) => {
+    const anulada = await api.anularVenta(id, motivo)
+    await refrescarVentas()
+    await refrescarClientesSilencioso()
+    return anulada
+  })
+
   const getCafeById = useCallback((id) => {
     return cafes.find(c => c.id === id)
   }, [cafes])
@@ -368,6 +495,10 @@ export function DataProvider({ children }) {
   const getClienteById = useCallback((id) => (
     clientes.find(cliente => String(cliente.id) === String(id))
   ), [clientes])
+
+  const getPedidosByCliente = useCallback((clienteId) => (
+    pedidos.filter(pedido => String(pedido.clienteId) === String(clienteId))
+  ), [pedidos])
 
   const getClientesConDeuda = useCallback(() => {
     return clientes.filter(c => c.tieneDeuda && c.montoDeuda > 0)
@@ -428,6 +559,9 @@ export function DataProvider({ children }) {
     gastos,
     loading,
     error,
+    errors,
+    cargandoPorClave,
+    isLoaded,
     // Cafés
     addCafe,
     updateCafe,

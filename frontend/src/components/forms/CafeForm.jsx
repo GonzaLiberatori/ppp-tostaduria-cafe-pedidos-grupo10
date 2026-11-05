@@ -43,7 +43,7 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
         descripcion: initialData.descripcion || '',
         mezcla: initialData.mezcla
           ? initialData.mezcla
-              .filter(m => cafes.some(cafe => cafe.id === Number(m.cafeId)))
+              .filter(m => cafes.some(cafe => cafe.entidadId === Number(m.cafeId)))
               .map(m => ({ ...m }))
           : [],
       })
@@ -67,13 +67,13 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
   }
 
   const mezclaSeleccionada = formData.mezcla
-    .map(m => ({ ...m, cafe: cafes.find(c => c.id === Number(m.cafeId)) }))
+    .map(m => ({ ...m, cafe: cafes.find(c => c.entidadId === Number(m.cafeId)) }))
     .filter(m => m.cafe)
 
   const totalPorcentaje = formData.mezcla.reduce((sum, m) => sum + (Number(m.porcentaje) || 0), 0)
 
   const recalcularMezcla = (cafeIds) => {
-    const seleccionados = cafeIds.map(id => cafes.find(c => c.id === Number(id))).filter(Boolean)
+    const seleccionados = cafeIds.map(id => cafes.find(c => c.entidadId === Number(id))).filter(Boolean)
     return sugerirPorcentajes(seleccionados).map(({ cafeId, porcentaje }) => ({ cafeId, porcentaje }))
   }
 
@@ -288,9 +288,9 @@ export default function CafeForm({ isOpen, onClose, onSubmit, initialData, cafes
                       value={nuevoComponente}
                       onChange={e => setNuevoComponente(e.target.value)}
                       options={simples
-                        .filter(cafe => !formData.mezcla.some(m => m.cafeId === cafe.id))
+                        .filter(cafe => !formData.mezcla.some(m => m.cafeId === cafe.entidadId))
                         .map(cafe => ({
-                          value: cafe.id,
+                          value: cafe.entidadId,
                           label: `${nombreCafe(cafe)} — ${origenCafe(cafe)} (${formatearKilos(kilosCafe(cafe, 'verde'))} verde)`,
                         }))}
                       placeholder="Seleccionar café simple"

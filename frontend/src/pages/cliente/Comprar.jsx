@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { MEDIOS_PAGO } from '../../data/constants'
 import { formatearMoneda, formatearKilos } from '../../utils/formatters'
 import { calcularTotalPedido } from '../../utils/calculations'
-import { nombreCafe, origenCafe, esOrganico, kilosCafe } from '../../utils/cafes'
+import { nombreCafe, origenCafe, esOrganico, kilosCafe, stockIdDeCafe } from '../../utils/cafes'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -25,7 +25,7 @@ export default function Comprar() {
   const clienteId = user?.clienteId
 
   const cafesPorId = useMemo(
-    () => Object.fromEntries(cafes.map(cafe => [cafe.id, cafe])),
+    () => Object.fromEntries(cafes.map(cafe => [cafe.entidadId, cafe])),
     [cafes]
   )
 
@@ -112,10 +112,9 @@ export default function Comprar() {
       .map(item => {
         const cafe = cafes.find(c => c.id === item.cafeId)
         return {
-          cafeId: item.cafeId,
-          nombre: nombreCafe(cafe),
+          // El backend recalcula el precio a partir del producto de stock.
+          stockId: stockIdDeCafe(cafe),
           kilos: parseFloat(item.kilos),
-          precioKg: cafe?.precioKg || 0,
         }
       })
 
@@ -130,9 +129,7 @@ export default function Comprar() {
             ? formData.ticket.name
             : null,
       items,
-      total: calcularTotalPedido(items),
       observaciones: formData.observaciones.trim(),
-      reservado: true, // stock no descontado hasta aprobación admin
     }
 
     try {
@@ -168,13 +165,12 @@ export default function Comprar() {
 
   const reiniciarCompra = () => {
     setFormData({
-      items: [{ stockId: '', kilos: '' }],
+      items: [{ cafeId: '', kilos: '' }],
       medioPago: 'transferencia',
       observaciones: '',
     })
     setErrors({})
     setSubmitError('')
-    setStockAlert(null)
     setEnviado(false)
   }
 

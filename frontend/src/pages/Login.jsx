@@ -19,7 +19,7 @@ export default function Login() {
     setError('')
     setLoading(true)
 
-    const result = login(username, password)
+    const result = await login(email, password)
     if (result.success) {
       navigate(result.user.role === 'cliente' ? '/cliente' : '/', { replace: true })
     } else {
@@ -27,12 +27,6 @@ export default function Login() {
     }
 
     setLoading(false)
-  }
-
-  const completarCredenciales = (cuenta) => {
-    setEmail(cuenta.email)
-    setPassword(cuenta.password)
-    setError('')
   }
 
   return (
@@ -46,18 +40,18 @@ export default function Login() {
         )}
 
         <div className="relative">
-          <label htmlFor="login-usuario" className="label text-coffee-100">Usuario</label>
+          <label htmlFor="login-usuario" className="label text-coffee-100">Email</label>
           <div className="relative">
             <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-coffee-300" />
             <input
               id="login-usuario"
-              type="text"
-              value={username}
-              onChange={e => setUsername(e.target.value)}
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
               className="input pl-10 bg-white/5 border-white/20 text-white placeholder-coffee-300 focus:ring-coffee-500/30 focus:border-coffee-500"
-              placeholder="Ingresar usuario"
+              placeholder="Ingresar email"
               required
-              autoComplete="username"
+              autoComplete="email"
               disabled={loading}
             />
           </div>

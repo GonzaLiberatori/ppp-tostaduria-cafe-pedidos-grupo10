@@ -4,11 +4,12 @@ import { formatearMoneda, formatearKilos, formatearFecha } from '../../utils/for
 import { ShoppingCart, List, User, Clock, Package } from 'lucide-react'
 
 export default function InicioCliente() {
-  const { pedidos, getPedidosByCliente, getTotalKilosPorTipo } = useData()
+  const { pedidos, getPedidosByCliente, getTotalKilosPorTipo, getClienteById } = useData()
   const { user } = useAuth()
 
   const clienteId = user?.clienteId
   const cliente = clienteId ? getClienteById(clienteId) : null
+  const saldoPendiente = cliente?.montoDeuda || 0
   const misPedidos = clienteId ? getPedidosByCliente(clienteId) : []
   const pedidosPendientes = misPedidos.filter(p => p.estado === 'Pendiente')
   const pedidosEntregados = misPedidos.filter(p => p.estado === 'Entregado')

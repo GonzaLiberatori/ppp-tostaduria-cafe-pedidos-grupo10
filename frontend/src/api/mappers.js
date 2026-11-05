@@ -12,7 +12,10 @@
  */
 export function tipoDeCafeToFrontend(tipo) {
   return {
-    id: tipo.id,
+    // `id` es único dentro del catálogo unificado (tc-/bl-); `entidadId` es la
+    // clave real de la tabla que espera el backend.
+    id: `tc-${tipo.id}`,
+    entidadId: tipo.id,
     tipoProducto: 'simple',
     variedad: tipo.variedad,
     region: tipo.region,
@@ -31,7 +34,8 @@ export function tipoDeCafeToFrontend(tipo) {
  */
 export function blendToFrontend(blend) {
   return {
-    id: blend.id,
+    id: `bl-${blend.id}`,
+    entidadId: blend.id,
     tipoProducto: 'blend',
     nombre: blend.nombre,
     descripcion: blend.descripcion,
@@ -63,7 +67,7 @@ export function loteToFrontend(lote) {
     ubicacion: lote.ubicacion_fisica,
     observaciones: lote.observaciones || '',
     ordenTuesteId: lote.orden_tueste_id,
-    cafeId: lote.tipo_de_cafe_id || lote.blend_id,
+    cafeId: lote.tipo_de_cafe_id ? `tc-${lote.tipo_de_cafe_id}` : `bl-${lote.blend_id}`,
   }
 }
 
@@ -71,31 +75,27 @@ export function loteToFrontend(lote) {
  * Ensambla los cafés unificados del frontend a partir de las 3 respuestas del backend.
  */
 export function ensamblarCafes(tiposDeCafe, blends, lotes) {
-  // Crear mapa de cafés por ID
-  const cafesMap = new Map()
+  const cafes = [
+    ...tiposDeCafe.map(tipoDeCafeToFrontend),
+    ...blends.map(blendToFrontend),
+  ]
 
-  // Agregar tipos de café
-  tiposDeCafe.forEach(tipo => {
-    cafesMap.set(tipo.id, tipoDeCafeToFrontend(tipo))
-  })
-
-  // Agregar blends
-  blends.forEach(blend => {
-    cafesMap.set(blend.id, blendToFrontend(blend))
-  })
+  // Los ids de tipo de café y blend viven en tablas distintas, por eso el
+  // catálogo unificado usa claves con prefijo para no colisionar.
+  const cafesMap = new Map(cafes.map(cafe => [cafe.id, cafe]))
 
   // Asignar lotes a sus cafés padre
   lotes.forEach(lote => {
     const loteFrontend = loteToFrontend(lote)
-    const cafeId = lote.tipo_de_cafe_id || lote.blend_id
-    
-    if (cafeId && cafesMap.has(cafeId)) {
-      cafesMap.get(cafeId).lotes.push(loteFrontend)
-    }
+    const clave = lote.tipo_de_cafe_id
+      ? `tc-${lote.tipo_de_cafe_id}`
+      : `bl-${lote.blend_id}`
+
+    const cafe = cafesMap.get(clave)
+    if (cafe) cafe.lotes.push(loteFrontend)
   })
 
-  // Convertir mapa a array
-  return Array.from(cafesMap.values())
+  return cafes
 }
 
 // ============================================================================
@@ -147,10 +147,11 @@ export function loteToBackendCreate(lote, cafePadre) {
   }
 
   // Determinar si el café padre es simple o blend
+  const entidadId = cafePadre.entidadId ?? cafePadre.id
   if (cafePadre.tipoProducto === 'simple') {
-    payload.tipo_de_cafe_id = cafePadre.id
+    payload.tipo_de_cafe_id = entidadId
   } else {
-    payload.blend_id = cafePadre.id
+    payload.blend_id = entidadId
   }
 
   return payload

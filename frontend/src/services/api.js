@@ -119,6 +119,12 @@ export const api = {
     autenticado: false,
     manejar401: false,
   }),
+  register: (datos) => request('/auth/register', {
+    method: 'POST',
+    body: datos,
+    autenticado: false,
+    manejar401: false,
+  }),
   me: () => request('/auth/me'),
 
   // Pedidos del panel
