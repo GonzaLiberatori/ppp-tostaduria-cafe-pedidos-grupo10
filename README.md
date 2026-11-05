@@ -173,3 +173,6 @@ Deshabilitado por defecto (`SCHEDULER_ENABLED=false`). Al habilitarlo, corre tod
 ### Convenciones
 
 Antes de contribuir, leé `AGENTS.md`: arquitectura por módulos (vertical slice), capas `router` / `schemas` / `models` / `crud` / `services`, y el control de commits del proyecto.
+
+### Postman
+https://julianagustinvillaverde-2391323.postman.co/workspace/78b3fb2a-31e3-4c11-a6f0-9b9f3250f4f5
