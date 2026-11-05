@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
 
-from app.modules.pedidos.models import MetodoPago
+from app.modules.pedidos.models import LoteTipo, MetodoPago
 from app.modules.ventas.schemas import PLAZOS_DE_PAGO, CondicionPago
 
 
@@ -95,7 +95,8 @@ class OrdenTuesteBase(BaseModel):
     fecha_tueste: datetime
     kg_gastados: Decimal
     kg_obtenidos: Decimal
-    perfil_de_tostado_id: int
+    tipo_de_cafe_id: Optional[int] = None
+    perfil_de_tostado_id: Optional[int] = None
 
 
 class OrdenTuesteCreate(OrdenTuesteBase):
@@ -186,6 +187,8 @@ class EmpleadoResponse(EmpleadoBase):
 class DetallePedidoBase(BaseModel):
     cantidad_kg: Decimal
     subtotal: Decimal
+    # Por defecto se vende café tostado; el portal del cliente puede pedir verde.
+    tipo_lote: LoteTipo = LoteTipo.TOSTADO
     tipo_de_cafe_id: Optional[int] = None
     blend_id: Optional[int] = None
     molienda_id: Optional[int] = None

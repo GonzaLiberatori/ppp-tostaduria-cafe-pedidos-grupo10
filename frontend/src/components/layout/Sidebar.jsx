@@ -7,13 +7,15 @@ import {
   Calculator, 
   ChevronLeft, 
   ChevronRight,
-  Coffee
+  Coffee,
+  Flame
 } from 'lucide-react'
 import { useState } from 'react'
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Stock', href: '/stock', icon: Package },
+  { name: 'Tueste', href: '/tueste', icon: Flame },
   { name: 'Clientes', href: '/clientes', icon: Users },
   { name: 'Pedidos', href: '/pedidos', icon: ShoppingCart },
   { name: 'Contabilidad', href: '/contabilidad', icon: Calculator },

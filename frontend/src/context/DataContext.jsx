@@ -77,11 +77,11 @@ function consumirLotesFIFO(lotes = [], kilosAConsumir) {
     const idx = nuevasLotes.findIndex(l => l.id === lote.id)
     if (idx === -1) continue
 
-    const disponible = nuevasLotes[idx].kilos || 0
+    const disponible = nuevasLotes[idx].kgDisponibles ?? nuevasLotes[idx].kilos ?? 0
     const consumir = Math.min(disponible, restantes)
 
     if (consumir > 0) {
-      nuevasLotes[idx].kilos = disponible - consumir
+      nuevasLotes[idx].kgDisponibles = disponible - consumir
       if (nuevasLotes[idx].estado === 'cerrado') {
         nuevasLotes[idx].estado = 'abierto'
       }
@@ -90,7 +90,9 @@ function consumirLotesFIFO(lotes = [], kilosAConsumir) {
     }
   }
 
-  const lotesFinales = nuevasLotes.filter(l => (l.kilos || 0) > 0.001)
+  const lotesFinales = nuevasLotes.filter(
+    l => (l.kgDisponibles ?? l.kilos ?? 0) > 0.001,
+  )
 
   return { lotes: lotesFinales, consumo, faltante: Math.max(restantes, 0) }
 }
@@ -457,7 +459,7 @@ export function DataProvider({ children }) {
   const anularVenta = withLoading('ventas', async (id, motivo) => {
     const anulada = await api.anularVenta(id, motivo)
     await refrescarVentas()
-    await refrescarClientesSilencioso()
+    await refrescarStockYClientes()
     return anulada
   })
 

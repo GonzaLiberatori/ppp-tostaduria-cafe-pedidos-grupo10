@@ -226,3 +226,78 @@ class TestActualizarPanel:
         respuesta = client.patch(f"{PREFIJO}/1", json={"estado": "Listo"})
 
         assert respuesta.status_code == 401
+
+
+class TestPanelCafeVerde:
+    """POST /api/v1/pedidos/panel con un ítem de café verde."""
+
+    def _crear_lote_verde(self, db_session, tipo_cafe_id: int, kg: Decimal):
+        from datetime import datetime, timedelta
+
+        from app.modules.pedidos.models import Lote
+
+        lote = Lote(
+            tipo="VERDE",
+            estado="ABIERTO",
+            fecha_vencimiento=datetime.now() + timedelta(days=90),
+            humedad=12.5,
+            kg_disponibles=kg,
+            kg_reales=kg,
+            ubicacion_fisica="Bodega verde",
+            tipo_de_cafe_id=tipo_cafe_id,
+        )
+        db_session.add(lote)
+        db_session.commit()
+        db_session.refresh(lote)
+        return lote
+
+    def test_compra_verde_descuenta_stock_verde(
+        self, client, auth_headers, db_session, sample_cliente, sample_tipo_cafe
+    ) -> None:
+        lote = self._crear_lote_verde(
+            db_session, sample_tipo_cafe.id, Decimal("20")
+        )
+        stock_id = f"tc-{sample_tipo_cafe.id}-VERDE"
+
+        respuesta = client.post(
+            PREFIJO,
+            json={
+                "clienteId": str(sample_cliente.persona_id),
+                "items": [{"stockId": stock_id, "kilos": 5}],
+            },
+            headers=auth_headers,
+        )
+
+        assert respuesta.status_code == 201
+        cuerpo = respuesta.json()
+        assert cuerpo["estado"] == "Pendiente"
+        assert cuerpo["items"][0]["stockId"] == stock_id
+
+        db_session.refresh(lote)
+        assert lote.kg_disponibles == Decimal("15")
+
+        from app.modules.pedidos.models import DetallePedido, LoteTipo
+
+        detalle = (
+            db_session.query(DetallePedido)
+            .filter(DetallePedido.pedido_id == int(cuerpo["id"]))
+            .one()
+        )
+        assert detalle.tipo_lote == LoteTipo.VERDE
+
+    def test_compra_verde_sin_stock_da_error(
+        self, client, auth_headers, sample_cliente, sample_tipo_cafe
+    ) -> None:
+        stock_id = f"tc-{sample_tipo_cafe.id}-VERDE"
+
+        respuesta = client.post(
+            PREFIJO,
+            json={
+                "clienteId": str(sample_cliente.persona_id),
+                "items": [{"stockId": stock_id, "kilos": 5}],
+            },
+            headers=auth_headers,
+        )
+
+        assert respuesta.status_code == 400
+        assert "VERDE" in respuesta.json()["detail"]

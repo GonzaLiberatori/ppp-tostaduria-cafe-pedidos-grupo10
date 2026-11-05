@@ -12,6 +12,7 @@ const FORM_INICIAL = {
   vencimiento: '',
   humedad: '',
   kilos: '',
+  kgDisponibles: '',
   ubicacion: '',
   observaciones: '',
   ordenTuesteId: '',
@@ -33,6 +34,7 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
         vencimiento: initialData.vencimiento ? initialData.vencimiento.slice(0, 10) : '',
         humedad: initialData.humedad ?? '',
         kilos: initialData.kilos ?? '',
+        kgDisponibles: initialData.kgDisponibles ?? initialData.kilos ?? '',
         ubicacion: initialData.ubicacion || '',
         observaciones: initialData.observaciones || '',
         ordenTuesteId: initialData.ordenTuesteId || '',
@@ -62,6 +64,15 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
     
     if (!formData.vencimiento) newErrors.vencimiento = 'La fecha de vencimiento es obligatoria'
     if (!formData.kilos || parseFloat(formData.kilos) <= 0) newErrors.kilos = 'Los kilos deben ser mayores a 0'
+    if (isEdicion) {
+      if (formData.kgDisponibles === '' || isNaN(parseFloat(formData.kgDisponibles))) {
+        newErrors.kgDisponibles = 'Los kilos disponibles son obligatorios'
+      } else if (parseFloat(formData.kgDisponibles) < 0) {
+        newErrors.kgDisponibles = 'Los kilos disponibles no pueden ser negativos'
+      } else if (parseFloat(formData.kgDisponibles) > parseFloat(formData.kilos)) {
+        newErrors.kgDisponibles = 'Los kilos disponibles no pueden superar los kilos reales'
+      }
+    }
     if (!formData.ubicacion.trim()) newErrors.ubicacion = 'La ubicación es obligatoria'
     
     // Humedad es obligatoria (el backend la requiere)
@@ -71,8 +82,10 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
       newErrors.humedad = 'La humedad debe estar entre 0 y 100'
     }
     
-    // Para lotes TOSTADO, la orden de tueste es obligatoria
-    if (formData.tipo === 'tostado' && !formData.ordenTuesteId) {
+    // Para lotes TOSTADO nuevos, la orden de tueste es obligatoria. En edición
+    // no se puede cambiar el origen del lote, así que no se exige: los lotes
+    // históricos del panel no tienen orden asociada.
+    if (!isEdicion && formData.tipo === 'tostado' && !formData.ordenTuesteId) {
       newErrors.ordenTuesteId = 'La orden de tueste es obligatoria para lotes tostados'
     }
     
@@ -96,6 +109,7 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
         vencimiento: `${formData.vencimiento}T12:00:00.000Z`,
         humedad: parseFloat(formData.humedad),
         kilos: parseFloat(formData.kilos),
+        kgDisponibles: isEdicion ? parseFloat(formData.kgDisponibles) : undefined,
         ubicacion: formData.ubicacion.trim(),
         observaciones: formData.observaciones.trim(),
         ordenTuesteId: formData.ordenTuesteId || null,
@@ -163,16 +177,29 @@ export default function LoteForm({ isOpen, onClose, onSubmit, initialData, cafeI
               error={errors.vencimiento}
             />
             <Input
-              label="Kilos *"
+              label={initialData ? 'Kilos reales *' : 'Kilos *'}
               name="kilos"
               type="number"
-              step="0.01"
-              min="0.01"
+              step="0.001"
+              min="0.001"
               value={formData.kilos}
               onChange={handleChange}
-              placeholder="0.00"
+              placeholder="0.000"
               error={errors.kilos}
             />
+            {initialData && (
+              <Input
+                label="Kilos disponibles *"
+                name="kgDisponibles"
+                type="number"
+                step="0.001"
+                min="0"
+                value={formData.kgDisponibles}
+                onChange={handleChange}
+                placeholder="0.000"
+                error={errors.kgDisponibles}
+              />
+            )}
             <Input
               label="Humedad (%)"
               name="humedad"

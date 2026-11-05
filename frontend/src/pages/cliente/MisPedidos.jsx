@@ -85,7 +85,8 @@ export default function MisPedidos() {
                       <td>
                         {pedido.items.map((item, i) => (
                           <div key={i} className="text-sm">
-                            {item.nombre || item.variedad || 'Café'} ({formatearKilos(item.kilos)})
+                            {item.nombre || item.variedad || 'Café'}
+                            {item.stockId?.endsWith('-VERDE') ? ' · Verde' : ''} ({formatearKilos(item.kilos)})
                           </div>
                         ))}
                       </td>

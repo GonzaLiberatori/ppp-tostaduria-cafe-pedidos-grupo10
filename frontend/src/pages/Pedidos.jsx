@@ -620,7 +620,14 @@ export default function Pedidos() {
                     <tbody>
                       {viewDetail.items.map((item, index) => (
                         <tr key={index}>
-                          <td>{item.nombre || item.variedad || 'Café'}</td>
+                          <td>
+                            {item.nombre || item.variedad || 'Café'}
+                            {item.stockId?.endsWith('-VERDE') && (
+                              <span className="ml-2 inline-flex items-center rounded bg-green-500/10 px-1.5 py-0.5 text-xs font-medium text-green-700">
+                                Verde
+                              </span>
+                            )}
+                          </td>
                           <td className="text-right font-mono tabular-nums">{formatearKilos(item.kilos)}</td>
                           <td className="text-right font-mono tabular-nums">{formatearMoneda(item.precioKg)}</td>
                           <td className="text-right font-mono tabular-nums font-medium">{formatearMoneda(item.kilos * item.precioKg)}</td>

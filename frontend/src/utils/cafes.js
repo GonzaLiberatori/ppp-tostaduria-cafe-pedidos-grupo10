@@ -17,7 +17,12 @@ export function origenCafe(cafe) {
 export function kilosPorTipo(lotes = [], tipo) {
   return lotes
     .filter(lote => lote.tipo === tipo)
-    .reduce((sum, lote) => sum + (lote.kilos || 0), 0)
+    // Se usa el stock disponible (no los kg reales de alta): los lotes ya
+    // vendidos conservan su peso original, pero solo cuentan los kg que quedan.
+    .reduce((sum, lote) => {
+      const disponible = lote.kgDisponibles ?? lote.kilos
+      return sum + (Number(disponible) || 0)
+    }, 0)
 }
 
 export function kilosCafe(cafe, tipo) {
@@ -25,13 +30,15 @@ export function kilosCafe(cafe, tipo) {
 }
 
 // El backend identifica cada producto vendible con un `stockId` del tipo
-// `tc-<id>-TOSTADO` (tipo de café) o `bl-<id>-TOSTADO` (blend).
-export function stockIdDeCafe(cafe) {
+// `tc-<id>-TOSTADO` (tipo de café) o `bl-<id>-TOSTADO` (blend). El sufijo
+// cambia a `VERDE` cuando se compra materia prima.
+export function stockIdDeCafe(cafe, tipo = 'tostado') {
   if (!cafe) return ''
   const entidadId = cafe.entidadId ?? cafe.id
   if (!entidadId) return ''
   const prefijo = cafe.tipoProducto === 'blend' ? 'bl' : 'tc'
-  return `${prefijo}-${entidadId}-TOSTADO`
+  const sufijoTipo = tipo === 'verde' ? 'VERDE' : 'TOSTADO'
+  return `${prefijo}-${entidadId}-${sufijoTipo}`
 }
 
 // Un blend se considera orgánico cuando todos sus componentes simples lo son.

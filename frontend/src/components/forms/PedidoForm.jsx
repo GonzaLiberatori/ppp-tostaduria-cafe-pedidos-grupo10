@@ -9,8 +9,13 @@ import { formatearMoneda, formatearKilos } from '../../utils/formatters'
 import { calcularTotalPedido, calcularKilosTotales } from '../../utils/calculations'
 import { nombreCafe, kilosCafe, stockIdDeCafe } from '../../utils/cafes'
 
+const TIPOS_CAFE = [
+  { value: 'tostado', label: 'Tostado' },
+  { value: 'verde', label: 'Verde' },
+]
+
 function itemVacio() {
-  return { cafeId: '', kilos: '' }
+  return { cafeId: '', tipo: 'tostado', kilos: '' }
 }
 
 export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
@@ -30,9 +35,9 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
     [clientes],
   )
 
-  // Solo se puede vender café tostado.
-  const cafesConTostado = useMemo(
-    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
+  // Se puede vender café tostado (producto terminado) o verde (materia prima).
+  const cafesConStock = useMemo(
+    () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0 || kilosCafe(cafe, 'verde') > 0),
     [cafes],
   )
 
@@ -44,11 +49,12 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
   )
 
   // Al editar, los ítems llegan del backend con `stockId` (`tc-3-TOSTADO`).
-  // Se traducen al café local para poder mostrarlos en el select.
-  const cafeIdDesdeStockId = (stockId) => {
-    if (!stockId) return ''
-    const cafe = cafes.find(item => stockIdDeCafe(item) === stockId)
-    return cafe?.id || ''
+  // Se traducen al café local y a su tipo para poder mostrarlos en el select.
+  const cafeSeleccionDesdeStockId = (stockId) => {
+    if (!stockId) return { cafeId: '', tipo: 'tostado' }
+    const tipo = stockId.endsWith('-VERDE') ? 'verde' : 'tostado'
+    const cafe = cafes.find(item => stockIdDeCafe(item, tipo) === stockId)
+    return { cafeId: cafe?.id || '', tipo }
   }
 
   useEffect(() => {
@@ -59,10 +65,16 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
         medioContacto: initialData.medioContacto || 'WhatsApp',
         observaciones: initialData.observaciones || '',
         items: initialData.items?.length
-          ? initialData.items.map(item => ({
-            cafeId: item.cafeId ?? cafeIdDesdeStockId(item.stockId),
-            kilos: item.kilos || '',
-          }))
+          ? initialData.items.map(item => {
+            const { cafeId, tipo } = item.cafeId
+              ? { cafeId: item.cafeId, tipo: item.tipo || 'tostado' }
+              : cafeSeleccionDesdeStockId(item.stockId)
+            return {
+              cafeId,
+              tipo,
+              kilos: item.kilos || '',
+            }
+          })
           : [itemVacio()],
       })
     } else {
@@ -95,7 +107,7 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
       // Al editar, el stock ya fue descontado en la creación del pedido.
       if (!initialData) {
         const cafe = cafeDe(item.cafeId)
-        const disponible = kilosCafe(cafe, 'tostado')
+        const disponible = kilosCafe(cafe, item.tipo)
         if (parseFloat(item.kilos) > disponible + 0.001) {
           newErrors[`item${index}_kilos`] =
             `Stock insuficiente (disponible: ${formatearKilos(disponible)})`
@@ -124,7 +136,7 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
         const cafe = cafeDe(item.cafeId)
         return {
           // El backend recalcula el precio a partir del producto de stock.
-          stockId: stockIdDeCafe(cafe),
+          stockId: stockIdDeCafe(cafe, item.tipo),
           kilos: parseFloat(item.kilos),
         }
       }),
@@ -155,6 +167,17 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
 
   const addItem = () => {
     setFormData(prev => ({ ...prev, items: [...prev.items, itemVacio()] }))
+  }
+
+  const handleTipoChange = (index, tipo) => {
+    // Al cambiar de tipo se limpia el café porque puede no tener stock del otro tipo.
+    setFormData(prev => ({
+      ...prev,
+      items: prev.items.map((item, i) => (
+        i === index ? { ...item, tipo, cafeId: '', kilos: '' } : item
+      )),
+    }))
+    setErrors(prev => ({ ...prev, [`item${index}_cafe`]: '', [`item${index}_kilos`]: '' }))
   }
 
   const removeItem = (index) => {
@@ -246,19 +269,28 @@ export default function PedidoForm({ isOpen, onClose, initialData, onSubmit }) {
           <div className="space-y-3">
             {formData.items.map((item, index) => {
               const cafe = cafeDe(item.cafeId)
-              const disponible = kilosCafe(cafe, 'tostado')
+              const disponible = kilosCafe(cafe, item.tipo)
+              const cafesDelTipo = cafesConStock.filter(c => kilosCafe(c, item.tipo) > 0)
 
               return (
-                <div key={index} className="grid gap-3 rounded-lg bg-[var(--color-bg-tertiary)] p-3 sm:grid-cols-[1fr_100px_120px_auto] sm:items-end">
+                <div key={index} className="grid gap-3 rounded-lg bg-[var(--color-bg-tertiary)] p-3 sm:grid-cols-[110px_1fr_100px_120px_auto] sm:items-end">
+                  <Select
+                    name="tipo"
+                    value={item.tipo}
+                    onChange={e => handleTipoChange(index, e.target.value)}
+                    options={TIPOS_CAFE}
+                    placeholder="Tipo"
+                    label=""
+                  />
                   <Select
                     name="cafeId"
                     value={item.cafeId}
                     onChange={e => handleChange(e, index)}
-                    options={cafesConTostado.map(c => ({
+                    options={cafesDelTipo.map(c => ({
                       value: c.id,
-                      label: `${nombreCafe(c)} (${formatearKilos(kilosCafe(c, 'tostado'))} disp.)`,
+                      label: `${nombreCafe(c)} (${formatearKilos(kilosCafe(c, item.tipo))} disp.)`,
                     }))}
-                    placeholder="Seleccionar café tostado"
+                    placeholder={`Seleccionar café ${item.tipo}`}
                     error={errors[`item${index}_cafe`]}
                     label=""
                   />

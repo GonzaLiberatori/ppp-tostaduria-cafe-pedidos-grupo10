@@ -651,3 +651,138 @@ class TestStockService:
         total = service.total_kg_disponibles_tipo_cafe(1)
         
         assert total > 0
+
+
+class TestVentaDeCafeVerde:
+    """El pedido puede combinar café tostado con materia prima (verde)."""
+
+    def _crear_lote(
+        self,
+        db_session,
+        tipo_cafe_id: int,
+        tipo: str,
+        kg: Decimal,
+        dias_vencimiento: int,
+    ) -> Lote:
+        from datetime import timedelta
+
+        lote = Lote(
+            tipo=tipo,
+            estado="ABIERTO",
+            fecha_vencimiento=datetime.now() + timedelta(days=dias_vencimiento),
+            humedad=12.5,
+            kg_disponibles=kg,
+            kg_reales=kg,
+            ubicacion_fisica=f"Bodega {tipo}",
+            tipo_de_cafe_id=tipo_cafe_id,
+        )
+        db_session.add(lote)
+        db_session.commit()
+        db_session.refresh(lote)
+        return lote
+
+    def test_pedido_verde_consume_solo_lotes_verdes(
+        self,
+        db_session,
+        sample_cliente,
+        sample_empleado,
+        sample_tipo_cafe,
+        sample_lote,
+    ) -> None:
+        """Comprar verde descuenta los lotes VERDE y deja intacto el tostado."""
+        lote_verde = self._crear_lote(
+            db_session, sample_tipo_cafe.id, "VERDE", Decimal("30"), 90
+        )
+
+        pedido = services.PedidoService(db_session).crear_pedido_completo(
+            schemas.PedidoCreate(
+                fecha=datetime.now(),
+                metodo_de_despacho="Retiro en local",
+                estado="PENDIENTE",
+                cliente_persona_id=sample_cliente.persona_id,
+                empleado_persona_id=sample_empleado.persona_id,
+                detalles=[
+                    schemas.DetallePedidoCreate(
+                        cantidad_kg=Decimal("10"),
+                        tipo_de_cafe_id=sample_tipo_cafe.id,
+                        tipo_lote=TipoLote.VERDE,
+                    )
+                ],
+            ),
+            sample_empleado.persona_id,
+        )
+
+        db_session.refresh(lote_verde)
+        db_session.refresh(sample_lote)
+
+        assert pedido.detalles[0].tipo_lote == TipoLote.VERDE
+        assert lote_verde.kg_disponibles == Decimal("20")
+        # El lote tostado no participa de la venta de materia prima.
+        assert sample_lote.kg_disponibles == Decimal("100")
+
+    def test_pedido_tostado_no_consume_verde(
+        self,
+        db_session,
+        sample_cliente,
+        sample_empleado,
+        sample_tipo_cafe,
+        sample_lote,
+    ) -> None:
+        """Un ítem tostado sigue descontando únicamente lotes TOSTADO."""
+        lote_verde = self._crear_lote(
+            db_session, sample_tipo_cafe.id, "VERDE", Decimal("30"), 90
+        )
+
+        services.PedidoService(db_session).crear_pedido_completo(
+            schemas.PedidoCreate(
+                fecha=datetime.now(),
+                metodo_de_despacho="Retiro en local",
+                estado="PENDIENTE",
+                cliente_persona_id=sample_cliente.persona_id,
+                empleado_persona_id=sample_empleado.persona_id,
+                detalles=[
+                    schemas.DetallePedidoCreate(
+                        cantidad_kg=Decimal("10"),
+                        tipo_de_cafe_id=sample_tipo_cafe.id,
+                    )
+                ],
+            ),
+            sample_empleado.persona_id,
+        )
+
+        db_session.refresh(lote_verde)
+        db_session.refresh(sample_lote)
+
+        assert lote_verde.kg_disponibles == Decimal("30")
+        assert sample_lote.kg_disponibles == Decimal("90")
+
+    def test_verde_sin_stock_no_toma_el_tostado(
+        self,
+        db_session,
+        sample_cliente,
+        sample_empleado,
+        sample_tipo_cafe,
+        sample_lote,
+    ) -> None:
+        """Sin stock verde el pedido falla aunque haya tostado disponible."""
+        with pytest.raises(ValueError, match="VERDE"):
+            services.PedidoService(db_session).crear_pedido_completo(
+                schemas.PedidoCreate(
+                    fecha=datetime.now(),
+                    metodo_de_despacho="Retiro en local",
+                    estado="PENDIENTE",
+                    cliente_persona_id=sample_cliente.persona_id,
+                    empleado_persona_id=sample_empleado.persona_id,
+                    detalles=[
+                        schemas.DetallePedidoCreate(
+                            cantidad_kg=Decimal("10"),
+                            tipo_de_cafe_id=sample_tipo_cafe.id,
+                            tipo_lote=TipoLote.VERDE,
+                        )
+                    ],
+                ),
+                sample_empleado.persona_id,
+            )
+
+        db_session.refresh(sample_lote)
+        assert sample_lote.kg_disponibles == Decimal("100")

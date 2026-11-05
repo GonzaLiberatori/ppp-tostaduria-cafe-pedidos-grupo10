@@ -87,6 +87,7 @@ def _a_codigo_http(exc: Exception) -> NoReturn:
             services.ComprobanteDuplicado,
             services.VentaNoPendienteDeCobro,
             services.PagareNoPermitido,
+            services.StockInsuficienteParaVenta,
         ),
     ):
         raise HTTPException(

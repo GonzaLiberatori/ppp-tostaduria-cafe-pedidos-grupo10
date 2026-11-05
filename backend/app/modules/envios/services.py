@@ -457,11 +457,12 @@ class EnvioService:
             for detalle in pedido.detalles:
                 tipo = detalle.tipo_de_cafe
                 blend = detalle.blend
+                tipo_lote = getattr(detalle.tipo_lote, "value", detalle.tipo_lote) or "TOSTADO"
                 if tipo is not None:
-                    stock_id = f"tc-{tipo.id}-TOSTADO"
+                    stock_id = f"tc-{tipo.id}-{tipo_lote}"
                     variedad = tipo.variedad
                 elif blend is not None:
-                    stock_id = f"bl-{blend.id}-TOSTADO"
+                    stock_id = f"bl-{blend.id}-{tipo_lote}"
                     variedad = blend.nombre
                 else:
                     stock_id = "desconocido"
