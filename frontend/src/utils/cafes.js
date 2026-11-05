@@ -30,15 +30,38 @@ export function kilosCafe(cafe, tipo) {
 }
 
 // El backend identifica cada producto vendible con un `stockId` del tipo
-// `tc-<id>-TOSTADO` (tipo de café) o `bl-<id>-TOSTADO` (blend). El sufijo
-// cambia a `VERDE` cuando se compra materia prima.
+// `tc-<id>-VERDE` / `tc-<id>-TOSTADO` (tipo de café) o
+// `bl-<id>-TOSTADO` (blend). El café verde solo existe para tipos de café.
 export function stockIdDeCafe(cafe, tipo = 'tostado') {
   if (!cafe) return ''
   const entidadId = cafe.entidadId ?? cafe.id
   if (!entidadId) return ''
   const prefijo = cafe.tipoProducto === 'blend' ? 'bl' : 'tc'
-  const sufijoTipo = tipo === 'verde' ? 'VERDE' : 'TOSTADO'
-  return `${prefijo}-${entidadId}-${sufijoTipo}`
+  const sufijo = String(tipo).toUpperCase() === 'VERDE' ? 'VERDE' : 'TOSTADO'
+  return `${prefijo}-${entidadId}-${sufijo}`
+}
+
+// Presentaciones vendibles de un café. El verde solo aplica a tipos de café
+// simples: un blend es una receta de tueste y no tiene lote verde propio.
+export function presentacionesDeCafe(cafe) {
+  if (!cafe) return []
+  const presentaciones = []
+
+  if (cafe.tipoProducto !== 'blend') {
+    presentaciones.push({
+      valor: 'verde',
+      etiqueta: 'Café verde',
+      disponible: kilosCafe(cafe, 'verde'),
+    })
+  }
+
+  presentaciones.push({
+    valor: 'tostado',
+    etiqueta: 'Café tostado',
+    disponible: kilosCafe(cafe, 'tostado'),
+  })
+
+  return presentaciones
 }
 
 // Un blend se considera orgánico cuando todos sus componentes simples lo son.

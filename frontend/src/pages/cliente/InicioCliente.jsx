@@ -69,7 +69,18 @@ export default function InicioCliente() {
         </div>
       </div>
 
-      <div className="grid gap-6 sm:grid-cols-3">
+      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="card p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-[var(--color-text-primary)]">Café verde disponible</h3>
+              <p className="text-sm text-[var(--color-text-muted)]">Materia prima para tueste</p>
+            </div>
+            <div className="text-right">
+              <p className="text-2xl font-bold text-[var(--color-text-primary)]">{formatearKilos(totalVerde)}</p>
+            </div>
+          </div>
+        </div>
         <div className="card p-6">
           <div className="flex items-center justify-between">
             <div>

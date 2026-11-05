@@ -24,7 +24,7 @@ export default function Suscripciones() {
 
   const clienteId = user?.clienteId
 
-  // Las suscripciones solo despachan café tostado; el verde se compra por pedido.
+  // El portal solo vende café tostado; el verde es materia prima interna.
   const cafesDisponibles = useMemo(
     () => cafes.filter(cafe => kilosCafe(cafe, 'tostado') > 0),
     [cafes],
